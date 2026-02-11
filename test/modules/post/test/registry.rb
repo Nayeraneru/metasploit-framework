@@ -132,8 +132,24 @@ class MetasploitModule < Msf::Post
 
       ret
     end
-  end
 
+    it "should enumerate the same subkeys with and without a trailing slash" do
+      ret = true
+      key_without_trailing_slash = 'HKLM\\SOFTWARE\\Microsoft'
+      key_with_trailing_slash = 'HKLM\\SOFTWARE\\Microsoft\\'
+
+      keys_without_trailing_slash = registry_enumkeys(key_without_trailing_slash)
+      keys_with_trailing_slash = registry_enumkeys(key_with_trailing_slash)
+
+      ret &&= keys_without_trailing_slash.kind_of?(Array)
+      ret &&= keys_with_trailing_slash.kind_of?(Array)
+      ret &&= (keys_without_trailing_slash == keys_with_trailing_slash)
+      ret &&= keys_without_trailing_slash.include?('PowerShell')
+
+      ret
+    end
+  end
+  
   def test_1_registry_write
     return skip('session platform is not windows') unless session.platform == 'windows'
 

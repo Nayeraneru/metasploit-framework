@@ -309,24 +309,29 @@ protected
   # Use reg.exe to enumerate all the subkeys in +key+
   #
   def shell_registry_enumkeys(key, view)
-    key = normalize_key(key)
+    key = normalize_key(key).delete_suffix('\\')
     subkeys = []
-    reg_data_types = 'REG_SZ|REG_MULTI_SZ|REG_DWORD_BIG_ENDIAN|REG_DWORD|REG_BINARY|'
-    reg_data_types << 'REG_DWORD_LITTLE_ENDIAN|REG_NONE|REG_EXPAND_SZ|REG_LINK|REG_FULL_RESOURCE_DESCRIPTOR'
+    results = shell_registry_cmd("query \"#{key}\"", view)
+    return subkeys if results.blank? || results.to_s.upcase.starts_with?('ERROR:')
 
     bslashes = key.count('\\')
     bslashes = bslashes - 1 if key.ends_with?('\\')
 
-    results = shell_registry_cmd("query \"#{key}\"", view)
-    unless results.to_s.upcase.starts_with?('ERROR:')
-      results.each_line do |line|
-        # now let's keep the ones that have a count = bslashes+1
-        # feels like there's a smarter way to do this but...
-        if (line.count('\\') == bslashes+1 && !line.ends_with?('\\'))
-          # then it's a first level subkey
-          subkeys << line.split('\\').last.chomp # take & chomp the last item only
-        end
-      end
+    results.each_line do |line|
+      line = line.strip
+
+      #keep registry key entries only, ignore value lines & informational output
+      next unless line.start_with?('HKEY_')
+      #ignore the queried key itself
+      next if line.casecmp(key).zero?
+      #ensure this key is a child of the queried key
+      next unless line.start_with?(key_prefix)
+
+      subkey = line.delete_prefix(key_prefix)
+      #only keep 1st level children
+      next if subkey.empty? || subkey.include?('\\')
+
+      subkeys << subkey
     end
     subkeys
   end
