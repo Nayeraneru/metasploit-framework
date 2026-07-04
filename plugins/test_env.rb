@@ -50,7 +50,15 @@ module Msf
         raise NotImplementedError, "#{self.class} must implement list"
       end
 
+      VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/
+      
       private
+
+      def validate_image_name!(image)
+        unless image.to_s.match?(VALID_IMAGE_NAME)
+          raise ArgumentError, "Invalid image name: #{image.inspect}"
+        end
+      end
 
       def parse_labels(labels_string)
         return {} if labels_string.nil? || labels_string.empty?
@@ -66,8 +74,7 @@ module Msf
     # DOCKER RUNTIME 
     # ============================================================
     class DockerRuntime < BaseRuntime
-      VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/
-
+      
       def available?
         _out, _err, status = Open3.capture3('docker', 'version')
         status.success?
@@ -179,14 +186,6 @@ module Msf
         end
 
         containers
-      end
-
-      private
-
-      def validate_image_name!(image)
-        unless image.to_s.match?(VALID_IMAGE_NAME)
-          raise ArgumentError, "Invalid image name: #{image.inspect}"
-        end
       end
     end
 
