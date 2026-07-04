@@ -52,12 +52,16 @@ Msf::Plugin
 |-----------|---------------|--------------|
 | `build` | `cmd_test_env_build(args)` | Build and launch environment for active module |
 | `list` | `cmd_test_env_list(args)` | Show all tracked environments |
-| `stop <ID>` | `cmd_test_env_stop(args)` | Stop a running container |
-| `start <ID>` | `cmd_test_env_start(args)` | Restart a stopped container |
-| `remove <ID>` | `cmd_test_env_remove(args)` | Tear down a container |
+| `stop <range>` | `cmd_test_env_stop(args)` | Stop running container(s) |
+| `start <range>` | `cmd_test_env_start(args)` | Restart stopped container(s) |
+| `remove <range>` | `cmd_test_env_remove(args)` | Tear down container(s) | 
 | `remove-all` | `cmd_test_env_remove_all(args)` | Tear down all containers |
 | `exec <ID>` | `cmd_test_env_exec(args)` | Run exploit against environment |
 | `help` | `cmd_test_env_help` | Show usage |
+
+## Range Parsing
+
+Metasploit commands like `sessions -k` support comma-separated and dash-separated ranges (e.g., `1-3,5,7-9`). The `stop`, `start`, and `remove` subcommands follow this pattern. `exec` intentionally accepts only a single ID for safety.
 
 ## Sample code for solid clarification
 ### Argument Parsing Logic
@@ -100,8 +104,11 @@ def cmd_test_env_tabs(str, words)
   # If subcommand is stop/start/remove/exec, suggest environment IDs
   if words.length == 2
     case words[0]
-    when 'stop', 'start', 'remove', 'exec'
+    when 'stop', 'start', 'remove'
       # TODO: Return IDs from registry (Week 6)
+      return []
+    when 'exec'
+      # Single ID only
       return []
     end
   end
@@ -151,4 +158,5 @@ end
 | How to parse subcommands? | `case` statement on `args.shift` | Same as `cmd_jobs` |
 | Tab completion? | `cmd_test_env_tabs` method | For good UX |
 | Error handling? | `begin/rescue` with `print_error` | Consistent with framework style |
+| Range support for IDs? | Comma/dash ranges for `stop`/`start`/`remove`; single ID for `exec` | Matches `sessions -k` pattern; mentor feedback — bulk ops should support ranges, but `exec` is safer single-target |
 
