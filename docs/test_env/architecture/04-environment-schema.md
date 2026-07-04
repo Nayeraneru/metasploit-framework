@@ -29,13 +29,48 @@ Health check type: http
 data/
   vuln_envs/
     README.md          # Schema documentation
-    jenkins.yml        # Jenkins environments (reference implementation)
+    jenkins.yml        # Jenkins with multiple profiles
 ```
 
 ## File Location
 `data/vuln_envs/{name}.yml`
 
 The `{name}` must match the `name` field inside the file.
+
+## Design Principle: Profiles Over Files
+
+A **single environment definition** represents one vulnerable service. It contains **one set of software versions** and **multiple configuration profiles** that describe different runtime states of that service.
+
+**Why profiles instead of separate files?**
+- **DRY**: Software versions are defined once, not duplicated across files
+- **Discoverability**: All variants of a service live in one file
+- **Relationship clarity**: `http-stopped` is explicitly a profile of `jenkins`, not a separate service
+- **Maintainability**: Adding a new version requires editing one file, not N files
+
+**Version strings represent actual software versions.** They are never suffixed to indicate configuration variants. The `profile` key selects the runtime configuration.
+
+## Three-Level Configuration Hierarchy
+
+When `test_env build` resolves an environment, it merges configuration in this order:
+
+```
+Level 1: Base shared (all profiles inherit)
+    ↓
+Level 2: Profile-specific overrides
+    ↓
+Level 3: Module-level overrides (minor tweaks)
+```
+
+This gives maximum reusability while allowing precise per-module customization.
+
+## Decision Matrix: Profile vs. Module Override
+
+| Scenario | Approach | Example |
+|----------|----------|---------|
+| Different runtime state (services on/off, different health check type) | **New profile** | `default` (HTTP on) vs `http-stopped` (HTTP off) |
+| Different health check endpoint or expected status | **Module override** | Same profile, module overrides `health_check.path` |
+| Different datastore default | **Module override** | Same profile, module overrides `datastore_defaults.TARGETURI` |
+| Different credentials | **Module override** | Same profile, module overrides `credentials.default` |
 
 ## Schema
 
@@ -45,8 +80,9 @@ The `{name}` must match the `name` field inside the file.
 |-----|------|----------|-------------|
 | `name` | String | Yes | Machine-friendly identifier (matches filename) |
 | `description` | String | Yes | Human-readable description |
-| `versions` | Hash | Yes | Map of version strings to configurations |
-| `shared` | Hash | Yes | Configuration shared across all versions |
+| `versions` | Hash | Yes | Map of version strings to image configurations |
+| `shared` | Hash | Yes | Base configuration inherited by all profiles |
+| `profiles` | Hash | Yes | Map of profile names to profile-specific overrides |
 
 ### versions Section
 
@@ -70,6 +106,8 @@ versions:
 
 ### shared Section
 
+Base configuration inherited by all profiles. Any field here can be overridden by a profile or by module-level metadata.
+
 #### ports (Required)
 ```yaml
 shared:
@@ -77,7 +115,7 @@ shared:
     http: 8080
 ```
 
-#### health_check (Required)
+#### health_check (Required in base or profile)
 ```yaml
 shared:
   health_check:
@@ -116,6 +154,15 @@ shared:
     TARGETURI: /script
 ```
 
+#### volumes (Optional)
+```yaml
+shared:
+  volumes:
+    jenkins_home:
+      container_path: /var/jenkins_home
+      persist: false
+```
+
 #### ci (Optional)
 ```yaml
 shared:
@@ -132,57 +179,121 @@ shared:
       timeout: 120
 ```
 
+### profiles Section
+
+Each profile is a key-value pair:
+- **Key**: Profile name (e.g., `default`, `http-stopped`)
+- **Value**: Hash that overrides or extends `shared`
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `description` | String | Yes | What this profile represents |
+| `health_check` | Hash | No | Overrides base `shared.health_check` |
+| `datastore_defaults` | Hash | No | Overrides base `shared.datastore_defaults` |
+| `credentials` | Hash | No | Overrides base `shared.credentials` |
+| `volumes` | Hash | No | Overrides base `shared.volumes` |
+| `ci` | Hash | No | Overrides base `shared.ci` |
+
+**Profile names** must match `[a-z0-9-]+`.
+
 ## Validation Rules
 
 1. `name` must match filename (without `.yml`)
 2. `versions` must have at least one entry
 3. Each version must have an `image`
 4. `shared.ports` must have at least one entry
-5. `shared.health_check` must have valid `type`
-6. If `type` is `http`, `path` is required
-7. If `type` is `command`, `command` and `expected_output` are required
+5. `profiles` must have at least one entry
+6. `profiles` must contain a `default` profile
+7. Profile names must match `[a-z0-9-]+`
+8. `health_check` must be defined in `shared` or in every profile
+9. Module-level `overrides` are deep-merged into the final profile config
 
-## Loader Implementation (Week 3)
+## Resolution & Merge Logic
+
+When `test_env build` resolves an environment definition, the loader performs a **three-level deep merge**:
+
+### Merge Order
+
+| Level | Source | What It Contains |
+|-------|--------|------------------|
+| 1 | `shared` | Base configuration inherited by all profiles |
+| 2 | `profiles[profile_name]` | Profile-specific overrides (minus `description`) |
+| 3 | `VulnEnv['overrides']` | Module-level tweaks |
+
+### Merge Rules
+
+- **Hash fields** (e.g., `health_check`, `datastore_defaults`) are deep-merged: nested keys are combined, not replaced wholesale.
+- **Scalar fields** (e.g., `image`, `build_args`) are replaced by the higher level.
+- **The `description` key** in a profile is informational only and is excluded from the merge.
+
+### Resolution Steps
+
+1. Load the YAML definition file by `name`.
+2. Validate that `versions` contains the requested `version`.
+3. Validate that `profiles` contains the requested `profile` (default: `'default'`).
+4. Start with a copy of `shared`.
+5. Deep-merge the selected profile's configuration into it.
+6. Deep-merge the module's `VulnEnv['overrides']` (if any).
+7. Attach the version-specific `image` and `build_args` from `versions[version]`.
+
+### Error Cases
+
+| Condition | Error |
+|-----------|-------|
+| Definition file not found | `"Definition not found: data/vuln_envs/{name}.yml"` |
+| Version not in `versions` | `"Version '{version}' not defined for '{name}'"` |
+| Profile not in `profiles` | `"Profile '{profile}' not defined for '{name}'"` |
+| No `default` profile exists | Validation fails at load time |
+
+### Loader Interface (Week 3)
+
+The `EnvironmentDefinitionLoader` exposes:
+
+- `load(name)` — Parse and validate a definition file.
+- `resolve(name, version, profile, overrides)` — Return the fully merged configuration for a specific environment instance.
+- `available_definitions` — List all `.yml` files in `data/vuln_envs/`.
+## Module Metadata Integration
+
+Modules reference a definition and optionally a profile. See [02-module-metadata.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/02-module-metadata.md) for the full `VulnEnv` schema.
 
 ```ruby
-class EnvironmentDefinitionLoader
-  DEFINITIONS_PATH = File.join(Msf::Config.data_directory, 'vuln_envs')
-  
-  def self.load(name)
-    require 'yaml'
-    path = File.join(DEFINITIONS_PATH, "#{name}.yml")
-    raise "Definition not found: #{path}" unless File.exist?(path)
-    
-    begin
-      YAML.safe_load(File.read(path), permitted_classes: [Symbol])
-    rescue Psych::SyntaxError => e
-      raise "Invalid YAML in #{path}: #{e.message}"
-    end
-  end
-  
-  def self.available_definitions
-    Dir.glob(File.join(DEFINITIONS_PATH, '*.yml')).map do |f|
-      File.basename(f, '.yml')
-    end.sort
-  end
-end
+# Standard module — uses default profile
+'VulnEnv' => {
+  'definition' => 'jenkins',
+  'default_version' => '2.361',
+  'port_mapping' => { 8080 => 'RPORT' }
+}
+
+# Variant module — uses http-stopped profile
+'VulnEnv' => {
+  'definition' => 'jenkins',
+  'profile' => 'http-stopped',
+  'default_version' => '2.361',
+  'port_mapping' => { 8080 => 'RPORT' }
+}
+
+# Module with minor override — same profile, different health check
+'VulnEnv' => {
+  'definition' => 'jenkins',
+  'default_version' => '2.361',
+  'port_mapping' => { 8080 => 'RPORT' },
+  'overrides' => {
+    'health_check' => {
+      'path' => '/script',
+      'expected_status' => 403
+    },
+    'datastore_defaults' => {
+      'TARGETURI' => '/script'
+    }
+  }
+}
 ```
 
-## Integration With Registry
-
-Environment definitions are loaded by the plugin and used to:
-1. Build/pull container images
-2. Map container ports to host ports
-3. Configure health checks
-4. Set module datastore defaults
-
-See [03-database-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/03-database-schema.md) for registry design.
-
-## Reference: jenkins.yml
+## Reference Implementation: jenkins.yml
 
 ```yaml
 name: jenkins
-description: Jenkins CI server with Groovy Script Console enabled
+description: Jenkins CI server with Groovy Script Console
 
 versions:
   "2.361":
@@ -203,14 +314,6 @@ shared:
       container_path: /var/jenkins_home
       persist: false
 
-  health_check:
-    type: http
-    path: /login
-    expected_status: 200
-    interval: 5
-    timeout: 2
-    retries: 12
-
   credentials:
     default:
       username: admin
@@ -230,4 +333,38 @@ shared:
       session_type: meterpreter
       expected_output: "uid="
       timeout: 120
+
+profiles:
+  default:
+    description: Standard Jenkins with HTTP enabled
+    health_check:
+      type: http
+      path: /login
+      expected_status: 200
+      interval: 5
+      timeout: 2
+      retries: 12
+
+  http-stopped:
+    description: Jenkins with HTTP stopped for config-drop exploit
+    health_check:
+      type: tcp
+      port: 8080
+      interval: 5
+      timeout: 2
+      retries: 12
 ```
+
+## Integration With Registry
+
+Environment definitions are loaded by the plugin and used to:
+1. Build/pull container images
+2. Map container ports to host ports
+3. Configure health checks
+4. Set module datastore defaults
+5. Apply profile-specific overrides
+6. Apply module-level overrides (if any)
+
+See [03-database-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/03-database-schema.md) for registry design.
+
+
