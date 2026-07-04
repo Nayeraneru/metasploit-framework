@@ -133,37 +133,107 @@ end
 ### Container Labels (Cross-Session Identification)
 
 Since in-memory data is lost on msfconsole restart, use **OCI container labels**
-to identify and reconstruct environments:
+to identify and reconstruct environments.
+
+**Design Decision:** Hybrid approach — individual labels for filterable identity
+fields, plus a base64-encoded JSON payload for complex metadata.
+
+**Rationale:** Docker's `--filter` flag only supports string matching on
+individual label values. We need native filtering for discovery (`managed_by`)
+and session isolation (`instance_id`). However, complex nested data
+(datastore hashes, credentials, exploit commands) is better packed into a
+single atomic JSON blob to avoid partial label corruption and simplify
+schema evolution.
 
 ```bash
 docker run -d \
+  --label "msf.vulnenv.managed_by=test_env" \
   --label "msf.vulnenv.instance_id=msf-$(hostname)-$$" \
   --label "msf.vulnenv.module=exploit/multi/http/jenkins_script_console" \
-  --label "msf.vulnenv.version=2.361" \
   --label "msf.vulnenv.env_id=1" \
-  --label "msf.vulnenv.created_at=2024-06-25T17:37:00Z" \
+  --label "msf.vulnenv.payload=eyJkYXRhc3RvcmUiOnsiUkhPU1RTIjoiMTI3LjAuMC4xIiwiUlBPUlQiOjgwODF9LCJleHBsb2l0X2NvbW1hbmQiOiJzZXQgUkhPU1RTIDEyNy4wLjAuMTsgc2V0IFJQT1JUIDgwODE7IGV4cGxvaXQiLCJjcmVkZW50aWFscyI6eyJ1c2VybmFtZSI6ImFkbWluIiwicGFzc3dvcmQiOiJhZG1pbiJ9LCJ2ZXJzaW9uIjoiMi4zNjEiLCJjcmVhdGVkX2F0IjoiMjAyNC0wNi0yNVQxNzozNzowMFoiLCJydW50aW1lIjoiZG9ja2VyIn0=" \
   vulnhub/jenkins:2.361
 ```
 
 **Label Schema:**
-| Label | Value | Purpose |
-|-------|-------|---------|
-| `msf.vulnenv.instance_id` | `msf-{hostname}-{pid}` | Identify msfconsole instance |
-| `msf.vulnenv.module` | Module fullname | Link to exploit module |
-| `msf.vulnenv.version` | Environment version | Track which version |
-| `msf.vulnenv.env_id` | Internal registry ID | Cross-reference |
-| `msf.vulnenv.created_at` | ISO8601 timestamp | Audit trail |
-| `msf.vulnenv.managed_by` | `test_env` | Identify framework-managed |
+
+| Label | Type | Value | Purpose |
+|-------|------|-------|---------|
+| `msf.vulnenv.managed_by` | Individual | `test_env` | Discovery filter — find all framework-managed containers |
+| `msf.vulnenv.instance_id` | Individual | `msf-{hostname}-{pid}` | Session isolation — identify which msfconsole created it |
+| `msf.vulnenv.module` | Individual | Module fullname | Module linkage — filter by target module |
+| `msf.vulnenv.env_id` | Individual | `1` | Registry cross-reference — map to in-memory ID |
+| `msf.vulnenv.payload` | **Base64 JSON** | Encoded metadata blob | Complete state reconstruction |
+
+**Payload JSON Structure (before encoding):**
+```json
+{
+  "datastore": {"RHOSTS": "127.0.0.1", "RPORT": 8081},
+  "exploit_command": "set RHOSTS 127.0.0.1; set RPORT 8081; exploit",
+  "credentials": {"username": "admin", "password": "admin"},
+  "version": "2.361",
+  "created_at": "2024-06-25T17:37:00Z",
+  "runtime": "docker"
+}
+```
+
+**Encoding/Decoding Helpers:**
+```ruby
+require 'json'
+require 'base64'
+
+def encode_payload(data)
+  Base64.strict_encode64(data.to_json)
+end
+
+def decode_payload(encoded)
+  return nil unless encoded
+  
+  json = Base64.strict_decode64(encoded)
+  JSON.parse(json, symbolize_names: true)
+rescue ArgumentError, JSON::ParserError => e
+  print_error("Failed to decode container payload: #{e.message}")
+  nil
+end
+```
 
 ### State Reconstruction From Labels (Future Enhancement)
 
 ```ruby
 def reconstruct_from_labels(runtime)
+  # Step 1: Discover all framework-managed containers via native filter
   containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
+  
   containers.each do |container|
-    labels = container['Labels']
-    # Rebuild registry entry from labels
-    # (Week 6 enhancement)
+    labels = container['Config']['Labels'] || {}
+    
+    # Step 2: Skip containers from other msfconsole instances
+    instance_id = labels['msf.vulnenv.instance_id']
+    next unless instance_id == current_instance_id
+    
+    # Step 3: Decode the payload for full metadata
+    payload = decode_payload(labels['msf.vulnenv.payload'])
+    next unless payload
+    
+    # Step 4: Rebuild registry entry
+    env_id = labels['msf.vulnenv.env_id'].to_i
+    @environments[env_id] = {
+      local_id: env_id,
+      container_id: container['Id'],
+      module_fullname: labels['msf.vulnenv.module'],
+      env_version: payload[:version],
+      rhost: payload[:datastore]['RHOSTS'],
+      rport: payload[:datastore]['RPORT'],
+      runtime: payload[:runtime],
+      image_ref: container['Config']['Image'],
+      status: container['State']['Status'],
+      exploit_command: payload[:exploit_command],
+      datastore: payload[:datastore],
+      created_at: Time.parse(payload[:created_at]),
+      started_at: Time.parse(container['State']['StartedAt'])
+    }
+    
+    @next_id = [@next_id, env_id + 1].max
   end
 end
 ```
@@ -285,3 +355,5 @@ My `vuln_environments` table follows this exact pattern:
 - `datastore` serialized text
 - `local_id` equivalent via `env_id` label
 - Lifecycle timestamps (`created_at`, `started_at`, `stopped_at`, `removed_at`)
+
+
