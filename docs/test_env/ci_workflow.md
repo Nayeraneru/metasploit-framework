@@ -1,7 +1,5 @@
 # CI Workflow: Automated Exploit Verification
 
-
-
 This document defines how `test_env` will be used in GitHub Actions to automatically:
 - Provision vulnerable environments from shared definitions
 - Execute exploits with pre-configured datastore options
@@ -10,10 +8,19 @@ This document defines how `test_env` will be used in GitHub Actions to automatic
 
 **Key principle:** CI consumes the same environment definitions used for local testing. No duplicated container configuration.
 
+## Trigger Strategy
+
+Environment provisioning and exploit execution are time-consuming operations. To balance validation coverage with CI resource usage, this workflow runs on a **weekly schedule** for regression detection, **on-demand via maintainer-applied labels** for PR validation, and **manually** for debugging. It does not run on every push or pull request.
+
+| Trigger | When It Runs | Purpose |
+|---------|--------------|---------|
+| Weekly schedule (`cron: '0 0 * * 0'`) | Every Sunday at midnight UTC | Catch environment bit-rot and upstream image changes |
+| Label (`vuln-env-test`) | When a maintainer applies the label to a PR | Validate PRs that modify environment definitions or exploit modules |
+| `workflow_dispatch` | Manual button click in GitHub UI | Debugging or pre-release checks |
 
 ## Directory Structure
 
-This directory structure will created as part of the project:
+This directory structure will be created as part of the project:
 
 ```
 metasploit-framework/
@@ -33,17 +40,15 @@ metasploit-framework/
     └── ci_workflow.md           
 ```
 
+## Resource Scripts
 
-
-A **resource script** with a `.rc` extension that contains msfconsole commands. Instead of typing commands one by one into msfconsole, they will be saved in a file and run:
+A **resource script** with a `.rc` extension contains msfconsole commands. Instead of typing commands one by one into msfconsole, they are saved in a file and run:
 
 ```bash
 ./msfconsole -q -r path/to/script.rc
 ```
 
 Metasploit reads the file and executes each line automatically, as if it's typed.
-
-
 
 ### Example: ci/test_jenkins.rc
 
@@ -73,11 +78,10 @@ exit
 ```bash
 ./msfconsole -q -r ci/test_jenkins.rc
 ```
----
 
 ## GitHub Actions Workflow
 
-**What this is:** A YAML file that tells GitHub Actions what to do on every push or pull request.
+**What this is:** A YAML file that tells GitHub Actions what to do.
 
 **File:** `.github/workflows/vuln-env-test.yml`
 
@@ -86,15 +90,27 @@ exit
 name: Vulnerable Environment Test
 
 on:
-  push:
-    branches: [ main ]
+  # Weekly scheduled run: catches environment bit-rot and upstream image changes
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at midnight UTC
+  
+  # Manual trigger: for debugging or pre-release validation
+  workflow_dispatch:
+  
+  # Label-triggered: maintainers add 'vuln-env-test' label to PRs that modify
+  # environment definitions or exploit modules
   pull_request:
-    branches: [ main ]
+    types: [labeled]
 
 jobs:
   test-jenkins:
     name: Test Jenkins Script Console
     runs-on: ubuntu-latest
+    
+    # Skip PRs without the vuln-env-test label
+    if: |
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'vuln-env-test')
     
     steps:
       - name: Checkout repository
@@ -148,8 +164,6 @@ jobs:
 | Verify session | `grep "Session.*opened"` | Confirm exploit succeeded |
 | Verify cleanup | `docker ps -q` | Confirm no leaked containers |
 
----
-
 ## Validation Criteria
 
 | Step | Expected Result | How It Is Checked | On Failure |
@@ -158,8 +172,6 @@ jobs:
 | `test_env exec 1` | Session opens | `framework.log` contains "Session.*opened" | Workflow fails |
 | `test_env remove-all` | All containers removed | `docker ps -q` returns empty | Workflow fails |
 | Post-cleanup | Zero `msf.vulnenv` containers remain | `docker ps -a --filter "label=msf.vulnenv.managed_by=test_env"` returns empty | Workflow fails |
-
----
 
 ## CI Metadata in Environment Definitions
 
@@ -173,7 +185,6 @@ ci:
     options:
       LHOST: 127.0.0.1
       LPORT: 4444
-      TARGETURI: /script
   validation:
     expected_session: true
     session_type: meterpreter
@@ -186,9 +197,8 @@ ci:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `ci.exploit.payload` | String | Yes | Payload to use for automated execution |
-| `ci.exploit.options` | Hash | No | Datastore options: `LHOST`, `LPORT`, `TARGETURI`, etc. |
+| `ci.exploit.options` | Hash | No | Payload/handler options: `LHOST`, `LPORT` |
 | `ci.validation.expected_session` | Boolean | Yes | Whether a session must be created |
 | `ci.validation.session_type` | String | No | Expected session type: `meterpreter`, `shell` |
 | `ci.validation.expected_output` | String | No | Substring to verify in session output |
 | `ci.validation.timeout` | Integer | Yes | Max seconds to wait for validation |
-
