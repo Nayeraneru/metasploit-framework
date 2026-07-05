@@ -709,11 +709,22 @@ module Msf
         if words.length == 1
           return %w[build list stop start remove remove-all exec status help]
         end
+
         if words.length == 2 && words[0] == 'build'
           return %w[VERSION= PROFILE= RPORT=]
         end
+
+        if words.length == 2
+          case words[0]
+          when 'stop', 'start', 'remove', 'exec'
+            # TODO: Return IDs from registry in Week 6
+            return []
+          end
+        end
+
         []
       end
+      
       private
 
       def get_module_vuln_env(mod)
