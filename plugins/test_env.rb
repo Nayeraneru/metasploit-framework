@@ -427,7 +427,37 @@ module Msf
       end
 
       def resolve(name, version, profile = 'default', overrides = {})
-        raise "Not yet implemented"
+        data = load(name)
+
+        # Verify version exists
+        unless data['versions'].key?(version)
+          available = data['versions'].keys.join(', ')
+          raise "Version '#{version}' not defined for '#{name}'. Available: #{available}"
+        end
+
+        # Verify profile exists
+        unless data['profiles'].key?(profile)
+          available = data['profiles'].keys.join(', ')
+          raise "Profile '#{profile}' not defined for '#{name}'. Available: #{available}"
+        end
+
+        # Start with a deep copy of shared
+        config = deep_copy(data['shared'] || {})
+
+        # Deep-merge profile-specific overrides (minus description)
+        profile_data = data['profiles'][profile].dup
+        profile_data.delete('description')
+        config = deep_merge(config, profile_data)
+
+        # Deep-merge module-level overrides
+        config = deep_merge(config, overrides) if overrides.is_a?(Hash) && !overrides.empty?
+
+        # Attach version-specific image and build args
+        version_data = data['versions'][version]
+        config['image'] = version_data['image']
+        config['build_args'] = version_data['build_args'] if version_data['build_args']
+
+        config
       end
 
       def available_definitions
@@ -487,6 +517,20 @@ module Msf
           end
         end
       end
+      def deep_copy(obj)
+        Marshal.load(Marshal.dump(obj))
+      end
+
+      def deep_merge(base, override)
+        return base unless override.is_a?(Hash)
+        base.merge(override) do |_key, old_val, new_val|
+          if old_val.is_a?(Hash) && new_val.is_a?(Hash)
+            deep_merge(old_val, new_val)
+          else
+            new_val
+          end
+        end
+      end      
     end
 
     # =====================================================================
@@ -600,6 +644,23 @@ module Msf
           return %w[build list stop start remove remove-all exec status help]
         end
         []
+      end
+      private
+
+      def get_module_vuln_env(mod)
+        return nil unless mod
+        mod.send(:module_info)['VulnEnv']
+      end
+
+      def parse_build_args(args)
+        options = {}
+        args.each do |arg|
+          if arg.include?('=')
+            key, value = arg.split('=', 2)
+            options[key.upcase] = value
+          end
+        end
+        options
       end
     end
 
