@@ -592,6 +592,7 @@ module Msf
           cmd_test_env_help
         end
       end
+
       def cmd_test_env_build(args)
         begin
           # 1. Preconditions
@@ -613,8 +614,18 @@ module Msf
 
           # 4. Extract references
           definition_name = vuln_env['definition']
+          unless definition_name
+            print_error("VulnEnv metadata missing required 'definition' key.")
+            return
+          end
+
           default_version = vuln_env['default_version']
+
           port_mapping    = vuln_env['port_mapping'] || {}
+          if port_mapping.empty?
+            print_warning("Module has no port_mapping. You may need to set RPORT manually.")
+          end
+
           module_overrides = vuln_env['overrides'] || {}
 
           # 5. Determine version and profile
@@ -724,7 +735,7 @@ module Msf
 
         []
       end
-      
+
       private
 
       def get_module_vuln_env(mod)
