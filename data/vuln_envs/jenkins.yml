@@ -1,5 +1,5 @@
 name: jenkins
-description: Jenkins CI server with Groovy Script Console enabled
+description: Jenkins CI server with Groovy Script Console
 
 versions:
   "2.361":
@@ -20,14 +20,6 @@ shared:
       container_path: /var/jenkins_home
       persist: false
 
-  health_check:
-    type: http
-    path: /login
-    expected_status: 200
-    interval: 5
-    timeout: 2
-    retries: 12
-
   credentials:
     default:
       username: admin
@@ -35,6 +27,14 @@ shared:
 
   datastore_defaults:
     TARGETURI: /script
+
+  health_check:
+    type: http
+    path: /login
+    expected_status: 200
+    interval: 5
+    timeout: 2
+    retries: 12
 
   ci:
     exploit:
@@ -47,3 +47,16 @@ shared:
       session_type: meterpreter
       expected_output: "uid="
       timeout: 120
+
+profiles:
+  default:
+    description: Standard Jenkins with HTTP enabled
+
+  http-stopped:
+    description: Jenkins with HTTP stopped for config-drop exploit
+    health_check:
+      type: tcp
+      port: 8080
+      interval: 5
+      timeout: 2
+      retries: 12
