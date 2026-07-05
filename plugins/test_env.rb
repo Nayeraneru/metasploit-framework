@@ -570,7 +570,7 @@ module Msf
 
         case subcommand
         when 'build'
-          print_status("TODO: test_env build")
+          cmd_test_env_build(args)
         when 'list'
           print_status("TODO: test_env list")
         when 'stop'
@@ -590,6 +590,72 @@ module Msf
         else
           print_error("Unknown subcommand: #{subcommand}")
           cmd_test_env_help
+        end
+      end
+      def cmd_test_env_build(args)
+        begin
+          # 1. Preconditions
+          mod = driver.active_module
+          unless mod
+            print_error("No active module. Use 'use <module>' first.")
+            return
+          end
+
+          # 2. Read module metadata
+          vuln_env = get_module_vuln_env(mod)
+          unless vuln_env
+            print_error("Module does not define a vulnerable environment configuration.")
+            return
+          end
+
+          # 3. Parse user arguments
+          options = parse_build_args(args)
+
+          # 4. Extract references
+          definition_name = vuln_env['definition']
+          default_version = vuln_env['default_version']
+          port_mapping    = vuln_env['port_mapping'] || {}
+          module_overrides = vuln_env['overrides'] || {}
+
+          # 5. Determine version and profile
+          version = options['VERSION'] || default_version
+          profile = options['PROFILE'] || vuln_env['profile'] || 'default'
+
+          unless version
+            print_error("No version specified and module has no default_version.")
+            return
+          end
+
+          # 6. Load and resolve
+          loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+          config = loader.resolve(definition_name, version, profile, module_overrides)
+
+          # 7. Display resolved configuration (Week 3 proof of concept)
+          print_status("Resolving environment for #{mod.fullname}...")
+          print_status("Definition: #{definition_name} | Version: #{version} | Profile: #{profile}")
+          print_status("Image: #{config['image']}")
+          print_status("Ports: #{config['ports'].inspect}")
+          print_status("Port mapping: #{port_mapping.inspect}")
+
+          if config['health_check']
+            print_status("Health check: #{config['health_check']['type']} #{config['health_check']['path']}")
+          end
+
+          if config['datastore_defaults']
+            print_status("Datastore defaults: #{config['datastore_defaults'].inspect}")
+          end
+
+          if config['credentials']
+            print_status("Credentials: #{config['credentials'].inspect}")
+          end
+
+          print_good("Environment definition resolved successfully.")
+          print_status("Ready for container launch (Week 4).")
+
+        rescue => e
+          print_error("test_env build failed: #{e.message}")
+          elog("test_env build error: #{e.class} - #{e.message}")
+          elog(e.backtrace.join("\n"))
         end
       end
 
@@ -642,6 +708,9 @@ module Msf
       def cmd_test_env_tabs(str, words)
         if words.length == 1
           return %w[build list stop start remove remove-all exec status help]
+        end
+        if words.length == 2 && words[0] == 'build'
+          return %w[VERSION= PROFILE= RPORT=]
         end
         []
       end
