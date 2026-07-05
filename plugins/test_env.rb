@@ -50,7 +50,7 @@ module Msf
         raise NotImplementedError, "#{self.class} must implement list"
       end
 
-      VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/
+      VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/ unless defined?(VALID_IMAGE_NAME)
       
       private
 
@@ -366,8 +366,8 @@ module Msf
     # Port Allocator
     # =====================================================================
     class PortAllocator
-      EPHEMERAL_START = 49152
-      EPHEMERAL_END   = 65535
+      EPHEMERAL_START = 49152 unless defined?(EPHEMERAL_START)
+      EPHEMERAL_END   = 65535 unless defined?(EPHEMERAL_END)
 
       class NoPortsAvailable < RuntimeError; end
 
@@ -406,6 +406,86 @@ module Msf
         true
       rescue Errno::EADDRINUSE
         false
+      end
+    end
+
+    # =====================================================================
+    # Environment Definition Loader
+    # =====================================================================
+    class EnvironmentDefinitionLoader
+      def initialize(data_directory)
+        @base_path = File.join(data_directory, 'vuln_envs')
+      end
+
+      def load(name)
+        path = File.join(@base_path, "#{name}.yml")
+        raise "Definition not found: #{path}" unless File.exist?(path)
+
+        data = YAML.safe_load(File.read(path), permitted_classes: [Symbol])
+        validate!(data, name)
+        data
+      end
+
+      def resolve(name, version, profile = 'default', overrides = {})
+        raise "Not yet implemented"
+      end
+
+      def available_definitions
+        return [] unless Dir.exist?(@base_path)
+        Dir.glob(File.join(@base_path, '*.yml')).map { |f| File.basename(f, '.yml') }
+      end
+
+      private
+
+      def validate!(data, filename)
+        # Rule 1: name must match filename
+        unless data['name'] == filename
+          raise "Validation failed: name '#{data['name']}' does not match filename '#{filename}'"
+        end
+
+        # Rule 2: versions must have at least one entry
+        unless data['versions'].is_a?(Hash) && !data['versions'].empty?
+          raise "Validation failed: 'versions' must have at least one entry"
+        end
+
+        # Rule 3: each version must have an image
+        data['versions'].each do |ver, cfg|
+          unless cfg.is_a?(Hash) && cfg['image'].is_a?(String) && !cfg['image'].empty?
+            raise "Validation failed: version '#{ver}' missing valid 'image'"
+          end
+        end
+
+        # Rule 4: shared.ports must have at least one entry
+        unless data['shared'].is_a?(Hash) && data['shared']['ports'].is_a?(Hash) && !data['shared']['ports'].empty?
+          raise "Validation failed: 'shared.ports' must have at least one entry"
+        end
+
+        # Rule 5: profiles must have at least one entry
+        unless data['profiles'].is_a?(Hash) && !data['profiles'].empty?
+          raise "Validation failed: 'profiles' must have at least one entry"
+        end
+
+        # Rule 6: profiles must contain a 'default' profile
+        unless data['profiles'].key?('default')
+          raise "Validation failed: 'profiles' must contain a 'default' profile"
+        end
+
+        # Rule 7: profile names must match [a-z0-9-]+
+        data['profiles'].keys.each do |profile_name|
+          unless profile_name.to_s.match?(/\A[a-z0-9-]+\z/)
+            raise "Validation failed: profile name '#{profile_name}' must match [a-z0-9-]+"
+          end
+        end
+
+        # Rule 8: health_check must be defined in shared or in every profile
+        shared_has_health = data['shared'].is_a?(Hash) && data['shared']['health_check'].is_a?(Hash)
+        unless shared_has_health
+          data['profiles'].each do |name, cfg|
+            unless cfg.is_a?(Hash) && cfg['health_check'].is_a?(Hash)
+              raise "Validation failed: 'health_check' must be defined in 'shared' or in every profile (missing in '#{name}')"
+            end
+          end
+        end
       end
     end
 
@@ -487,22 +567,32 @@ module Msf
 
       def cmd_test_env_status(args)
         runtime = self.class.runtime
-        
         if runtime
           print_status("Runtime: #{runtime.name}")
-          print_status("Available: #{runtime.available?}")
-          
-          begin
-            containers = runtime.list
-            print_status("Container engine responsive: yes")
-            print_status("Active containers: #{containers.length}")
-          rescue => e
-            print_error("Container engine check failed: #{e.message}")
-          end
         else
-          print_error("No container runtime configured.")
-          print_error("Install Docker or Podman, or set TEST_ENV_RUNTIME.")
+          print_error("No runtime configured.")
         end
+
+        loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+        defs = loader.available_definitions
+
+        valid_defs = []
+        defs.each do |name|
+          begin
+            loader.load(name)
+            valid_defs << name
+          rescue => e
+            print_error("Validation failed for '#{name}': #{e.message}")
+          end
+        end
+
+        if valid_defs.any?
+          print_status("Available definitions: #{valid_defs.join(', ')}")
+        else
+          print_error("No valid definitions found.")
+        end
+      rescue => e
+        print_error("Status check failed: #{e.message}")
       end
 
       def cmd_test_env_tabs(str, words)
