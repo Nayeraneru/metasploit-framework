@@ -29,7 +29,7 @@ When I type `test_env build`, this happens:
 From `lib/msf/ui/console/command_dispatcher/jobs.rb`, I saw:
 - One dispatcher can handle multiple commands via `commands` hash
 - `cmd_jobs(*args)` uses `args.shift` to get the subcommand
-- `cmd_rename_job_tabs` provides tab completion
+- ``cmd_jobs_tabs` provides tab completion
 - `cmd_jobs_help` prints usage information
 
 ## My Design: test_env Command Dispatcher
