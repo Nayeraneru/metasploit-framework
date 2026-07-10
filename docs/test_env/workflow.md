@@ -15,7 +15,7 @@ msf exploit(apache_activemq_jolokia_rce) > test_env build
 ```
 
 **Expected behavior:**
-- The plugin detects the active module and reads `mod.info['VulnEnv']`
+- The plugin detects the active module and reads `mod.info['VulnerableEnvironment']`
 - It resolves the definition name (`activemq`) and loads `data/vuln_envs/activemq.yml`
 - It selects the default version (`5.18.6`)
 - It auto-detects the container runtime (Docker preferred, Podman fallback)
@@ -52,7 +52,7 @@ msf exploit(multi/http/jenkins_script_console) > test_env build VERSION=2.375
 ```
 
 **Expected behavior:**
-- The `VERSION=2.375` argument overrides the `default_version` from the module's `VulnEnv`
+- The `VERSION=2.375` argument overrides the `default_variant` from the module's `VulnerableEnvironment`
 - The plugin loads `jenkins.yml` and selects the `2.375` entry under `versions`
 - If the version does not exist, the command fails immediately with a list of available versions
 
@@ -261,7 +261,7 @@ msf exploit(multi/http/jenkins_script_console) > test_env remove-all
 | Error Condition | Expected Output | Implementation Notes |
 |-----------------|----------------|---------------------|
 | No active module | `[-] No active module. Use 'use <module>' first.` | Check `driver.active_module` before any other logic |
-| Module has no `VulnEnv` | `[-] Module does not define a vulnerable environment configuration.` | Check `mod.info['VulnEnv']` after resolving active module |
+| Module has no `VulnerableEnvironment` | `[-] Module does not define a vulnerable environment configuration.` | Check `mod.info['VulnerableEnvironment']` after resolving active module |
 | No container runtime | `[-] No container runtime found. Install Docker or Podman.` | `RuntimeAdapter.detect` returns `nil` |
 | Image pull fails | `[-] Failed to pull image: <image>` | Check exit status of `docker pull` |
 | Container start fails | `[-] Failed to start container: <error>` | Catch `RuntimeAdapter#run` exceptions |
@@ -278,3 +278,4 @@ msf exploit(multi/http/jenkins_script_console) > test_env remove-all
 - Table output must use `Rex::Ui::Text::Table` for consistency with built-in commands like `sessions`, `jobs`
 - The `test_env` command must be available regardless of whether a database is connected (Phase 1 is in-memory only)
 - Container labels must be applied on every `run` so that orphaned containers can be identified even if the registry is lost
+- The `VulnerableEnvironment` key is the canonical metadata key. No abbreviated form (`VulnEnv`) is accepted.
