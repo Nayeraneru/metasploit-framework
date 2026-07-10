@@ -84,24 +84,35 @@ This gives maximum reusability while allowing precise per-module customization.
 | `shared` | Hash | Yes | Base configuration inherited by all profiles |
 | `profiles` | Hash | Yes | Map of profile names to profile-specific overrides |
 
-### versions Section
+### variants Section
 
-Each version is a key-value pair:
-- **Key**: Version string (e.g., `"2.361"`)
-- **Value**: Hash with version-specific configuration
+Each variant is a key-value pair:
+- **Key**: Variant identifier (arbitrary string, e.g., `"2.361"`, `"2.361-postgres"`, `"latest"`)
+- **Value**: Hash with variant-specific configuration
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `image` | String | Yes | OCI image reference |
+| `version` | String | No | Actual software version (informational, e.g., `"2.361"`) |
 | `build_args` | Hash | No | Docker build arguments |
 
 Example:
 ```yaml
-versions:
+variants:
   "2.361":
     image: vulnhub/jenkins:2.361
+    version: "2.361"
     build_args:
       JENKINS_VERSION: "2.361"
+  "2.361-postgres":
+    image: vulnhub/jenkins:2.361-postgres
+    version: "2.361"
+    build_args:
+      JENKINS_VERSION: "2.361"
+      DB_BACKEND: "postgresql"
+  "2.375":
+    image: vulnhub/jenkins:2.375
+    version: "2.375"
 ```
 
 ### shared Section
@@ -199,8 +210,8 @@ Each profile is a key-value pair:
 ## Validation Rules
 
 1. `name` must match filename (without `.yml`)
-2. `versions` must have at least one entry
-3. Each version must have an `image`
+2. `variants` must have at least one entry
+3. Each variant must have an `image`
 4. `shared.ports` must have at least one entry
 5. `profiles` must have at least one entry
 6. `profiles` must contain a `default` profile
@@ -218,7 +229,7 @@ When `test_env build` resolves an environment definition, the loader performs a 
 |-------|--------|------------------|
 | 1 | `shared` | Base configuration inherited by all profiles |
 | 2 | `profiles[profile_name]` | Profile-specific overrides (minus `description`) |
-| 3 | `VulnEnv['overrides']` | Module-level tweaks |
+| 3 | `VulnerableEnvironment['overrides']` | Module-level tweaks |
 
 ### Merge Rules
 
@@ -229,19 +240,19 @@ When `test_env build` resolves an environment definition, the loader performs a 
 ### Resolution Steps
 
 1. Load the YAML definition file by `name`.
-2. Validate that `versions` contains the requested `version`.
+2. Validate that `variants` contains the requested `variant`.
 3. Validate that `profiles` contains the requested `profile` (default: `'default'`).
 4. Start with a copy of `shared`.
 5. Deep-merge the selected profile's configuration into it.
-6. Deep-merge the module's `VulnEnv['overrides']` (if any).
-7. Attach the version-specific `image` and `build_args` from `versions[version]`.
+6. Deep-merge the module's `VulnerableEnvironment['overrides']` (if any).
+7. Attach the variant-specific `image`, `version`, and `build_args` from `variants[variant]`.
 
 ### Error Cases
 
 | Condition | Error |
 |-----------|-------|
 | Definition file not found | `"Definition not found: data/vuln_envs/{name}.yml"` |
-| Version not in `versions` | `"Version '{version}' not defined for '{name}'"` |
+| Variant not in `variants` | `"Variant '{variant}' not defined for '{name}'"` |
 | Profile not in `profiles` | `"Profile '{profile}' not defined for '{name}'"` |
 | No `default` profile exists | Validation fails at load time |
 
@@ -254,30 +265,37 @@ The `EnvironmentDefinitionLoader` exposes:
 - `available_definitions` — List all `.yml` files in `data/vuln_envs/`.
 ## Module Metadata Integration
 
-Modules reference a definition and optionally a profile. See [02-module-metadata.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/02-module-metadata.md) for the full `VulnEnv` schema.
+Modules reference a definition and optionally a profile. See [02-module-metadata.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/02-module-metadata.md) for the full `VulnerableEnvironment` schema.
 
 ```ruby
-# Standard module — uses default profile
-'VulnEnv' => {
-  'definition' => 'jenkins',
-  'default_version' => '2.361',
-  'port_mapping' => { 8080 => 'RPORT' }
+# Standard module — uses default variant and profile
+'VulnerableEnvironment' => {
+  'definition'      => 'jenkins',
+  'default_variant' => '2.361',
+  'port_mapping'    => { 8080 => 'RPORT' }
 }
 
-# Variant module — uses http-stopped profile
-'VulnEnv' => {
-  'definition' => 'jenkins',
-  'profile' => 'http-stopped',
-  'default_version' => '2.361',
-  'port_mapping' => { 8080 => 'RPORT' }
+# Variant module — uses postgres variant
+'VulnerableEnvironment' => {
+  'definition'      => 'jenkins',
+  'default_variant' => '2.361-postgres',
+  'port_mapping'    => { 8080 => 'RPORT' }
+}
+
+# Module with profile override
+'VulnerableEnvironment' => {
+  'definition'      => 'jenkins',
+  'default_variant' => '2.361',
+  'profile'         => 'http-stopped',
+  'port_mapping'    => { 8080 => 'RPORT' }
 }
 
 # Module with minor override — same profile, different health check
-'VulnEnv' => {
-  'definition' => 'jenkins',
-  'default_version' => '2.361',
-  'port_mapping' => { 8080 => 'RPORT' },
-  'overrides' => {
+'VulnerableEnvironment' => {
+  'definition'      => 'jenkins',
+  'default_variant' => '2.361',
+  'port_mapping'    => { 8080 => 'RPORT' },
+  'overrides'       => {
     'health_check' => {
       'path' => '/script',
       'expected_status' => 403
@@ -295,15 +313,24 @@ Modules reference a definition and optionally a profile. See [02-module-metadata
 name: jenkins
 description: Jenkins CI server with Groovy Script Console
 
-versions:
+variants:
   "2.361":
     image: vulnhub/jenkins:2.361
+    version: "2.361"
     build_args:
       JENKINS_VERSION: "2.361"
+  "2.361-postgres":
+    image: vulnhub/jenkins:2.361-postgres
+    version: "2.361"
+    build_args:
+      JENKINS_VERSION: "2.361"
+      DB_BACKEND: "postgresql"
   "2.375":
     image: vulnhub/jenkins:2.375
+    version: "2.375"
     build_args:
       JENKINS_VERSION: "2.375"
+
 
 shared:
   ports:
