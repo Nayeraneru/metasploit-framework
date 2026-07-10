@@ -44,15 +44,15 @@ module Msf
   class Plugin::VulnEnv < Msf::Plugin
     # Encapsulates and validates VulnerableEnvironment metadata from a module.
     class VulnerableEnvironment
-      attr_reader :definition, :default_version, :profile, :port_mapping, :overrides
+      attr_reader :definition, :default_variant, :profile, :port_mapping, :overrides
 
       # Required keys that must be present
-      REQUIRED_KEYS = %w[definition default_version port_mapping].freeze
+      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze
 
       # Valid types for each key
       SCHEMA = {
         'definition'      => String,
-        'default_version' => String,
+        'default_variant' => String,
         'profile'         => String,
         'port_mapping'    => Hash,
         'overrides'       => Hash
@@ -64,7 +64,7 @@ module Msf
         validate!
 
         @definition      = @raw['definition']
-        @default_version = @raw['default_version']
+        @default_variant = @raw['default_variant']
         @profile         = @raw['profile'] || 'default'
         @port_mapping    = @raw['port_mapping'] || {}
         @overrides       = @raw['overrides'] || {}
@@ -149,7 +149,7 @@ class Plugin::VulnEnv < Msf::Plugin
       end
 
       # env.definition      => 'jenkins'
-      # env.default_version   => '2.361'
+      # env.default_variant   => '2.361'
       # env.profile           => 'default'
       # env.port_mapping      => {8080 => 'RPORT'}
       # env.overrides         => { ... }
@@ -226,7 +226,7 @@ puts ""
 puts "=== Adding custom key (runtime injection test) ==="
 info['VulnerableEnvironment'] = {
   'definition'      => 'jenkins',
-  'default_version' => '2.361',
+  'default_variant' => '2.361',
   'port_mapping'    => { 8080 => 'RPORT' }
 }
 
@@ -257,12 +257,12 @@ Name: Jenkins-CI Script-Console Java Execution
 === Adding custom key (runtime injection test) ===
 Added VulnerableEnvironment
 Has VulnerableEnvironment? true
-VulnerableEnvironment: {"definition"=>"jenkins", "default_version"=>"2.361", "port_mapping"=>{8080=>"RPORT"}}
+VulnerableEnvironment: {"definition"=>"jenkins", "default_variant"=>"2.361", "port_mapping"=>{8080=>"RPORT"}}
 
 === Reading back ===
 Same object? true
 Has VulnerableEnvironment? true
-VulnerableEnvironment: {"definition"=>"jenkins", "default_version"=>"2.361", "port_mapping"=>{8080=>"RPORT"}}
+VulnerableEnvironment: {"definition"=>"jenkins", "default_variant"=>"2.361", "port_mapping"=>{8080=>"RPORT"}}
 ```
 
 ### What This Proves
@@ -323,14 +323,14 @@ if nil: print_error("Module does not define a vulnerable environment configurati
     ↓
 if present:
     env.definition      => 'jenkins'
-    env.default_version => '2.361'
+    env.default_variant => '2.361'
     env.profile         => 'default'
     env.port_mapping    => {8080 => 'RPORT'}
     env.overrides       => { ... }
     ↓
     yaml_path = File.join(Msf::Config.data_directory, 'vuln_envs', "#{env.definition}.yml")
     definition_data = YAML.load_file(yaml_path)
-    env_config = loader.resolve(env.definition, env.default_version, env.profile, env.overrides)
+    env_config = loader.resolve(env.definition, env.default_variant, env.profile, env.overrides)
 ```
 
 ## Error Cases
@@ -344,5 +344,5 @@ if present:
 | Invalid port_mapping key | "port_mapping key must be an integer port, got: 'abc'" |
 | Invalid port_mapping value | "port_mapping value must be a String datastore option name, got: 123" |
 | Definition file not found | "Environment definition not found: data/vuln_envs/{name}.yml" |
-| Version not found in definition | "Version '{version}' not defined for '{name}'" |
+| Version not found in definition | "Variant '{variant}' not defined for '{name}'" |
 | Profile not found in definition | "Profile '{profile}' not defined for '{name}'" |
