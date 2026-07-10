@@ -313,6 +313,27 @@ module Msf
         'podman'
       end
 
+      def verify_rootless
+        # Verify Podman mode and networking backend.
+        # Returns [ok, message] — ok is true if viable, message describes status.
+        out, _, st = Open3.capture3('podman', 'info', '--format', '{{.Host.Security.Rootless}}')
+        rootless = st.success? && out.strip.downcase == 'true'
+
+        unless rootless
+          return [true, 'Podman running in rootful mode.']
+        end
+
+        # Rootless: check for pasta (preferred) or slirp4netns (fallback)
+        if Open3.capture3('which', 'pasta')[2].success?
+          [true, 'Rootless Podman verified — pasta networking available.']
+        elsif Open3.capture3('which', 'slirp4netns')[2].success?
+          [true, 'Rootless Podman verified — slirp4netns networking available.']
+        else
+          [false, 'Rootless Podman detected but no networking backend (pasta or slirp4netns) found. ' \
+                  'Port forwarding may fail. Install pasta or slirp4netns.']
+        end
+      end
+
       def pull(image)
         validate_image_name!(image)
         qualified = qualify_image(image)
@@ -768,6 +789,10 @@ module Msf
         runtime = self.class.runtime
         if runtime
           print_status("Runtime: #{runtime.name}")
+          if runtime.respond_to?(:verify_rootless)
+            ok, msg = runtime.verify_rootless
+            ok ? print_good(msg) : print_warning(msg)
+          end
         else
           print_error("No runtime configured.")
         end
@@ -857,6 +882,11 @@ module Msf
       ConsoleCommandDispatcher.runtime = @runtime
       if @runtime
         print_status("TestEnv plugin loaded. Runtime: #{@runtime.name}")
+        # Verify rootless Podman when applicable
+        if @runtime.respond_to?(:verify_rootless)
+          ok, msg = @runtime.verify_rootless
+          ok ? print_status(msg) : print_warning(msg)
+        end
       else
         print_error("TestEnv plugin loaded, but no container runtime found.")
         print_error("Install Docker or Podman to use test_env.")
