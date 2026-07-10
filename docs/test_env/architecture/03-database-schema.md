@@ -135,67 +135,52 @@ end
 Since in-memory data is lost on msfconsole restart, use **OCI container labels**
 to identify and reconstruct environments.
 
-**Design Decision:** Hybrid approach — individual labels for filterable identity
-fields, plus a base64-encoded JSON payload for complex metadata.
+**Design Decision:** Use only lightweight individual labels for the minimal
+dynamic data needed. All static metadata (credentials, datastore defaults,
+health checks, exploit commands) is reconstructible from the module's
+`VulnerableEnvironment` definition and the environment YAML file.
 
-**Rationale:** Docker's `--filter` flag only supports string matching on
-individual label values. We need native filtering for discovery (`managed_by`)
-and session isolation (`instance_id`). However, complex nested data
-(datastore hashes, credentials, exploit commands) is better packed into a
-single atomic JSON blob to avoid partial label corruption and simplify
-schema evolution.
+**Rationale:** The second mentor correctly observed that if we can identify
+the container by `managed_by` + `instance_id` + `module` labels, we can look
+up the module's `VulnerableEnvironment` definition from `module_info`. The
+definition contains `port_mapping`, `datastore_defaults`, `credentials`, and
+`health_check`. The only truly dynamic data that cannot be reconstructed is:
 
-```bash
-docker run -d \
-  --label "msf.vulnenv.managed_by=test_env" \
-  --label "msf.vulnenv.instance_id=msf-$(hostname)-$$" \
-  --label "msf.vulnenv.module=exploit/multi/http/jenkins_script_console" \
-  --label "msf.vulnenv.env_id=1" \
-  --label "msf.vulnenv.payload=eyJkYXRhc3RvcmUiOnsiUkhPU1RTIjoiMTI3LjAuMC4xIiwiUlBPUlQiOjgwODF9LCJleHBsb2l0X2NvbW1hbmQiOiJzZXQgUkhPU1RTIDEyNy4wLjAuMTsgc2V0IFJQT1JUIDgwODE7IGV4cGxvaXQiLCJjcmVkZW50aWFscyI6eyJ1c2VybmFtZSI6ImFkbWluIiwicGFzc3dvcmQiOiJhZG1pbiJ9LCJ2ZXJzaW9uIjoiMi4zNjEiLCJjcmVhdGVkX2F0IjoiMjAyNC0wNi0yNVQxNzozNzowMFoiLCJydW50aW1lIjoiZG9ja2VyIn0=" \
-  vulnhub/jenkins:2.361
-```
+1. **Allocated port(s)** — dynamically assigned at runtime
+2. **Environment version** — which image tag was provisioned
+3. **Container runtime ID** — the actual Docker/Podman container ID
 
 **Label Schema:**
 
 | Label | Type | Value | Purpose |
 |-------|------|-------|---------|
-| `msf.vulnenv.managed_by` | Individual | `test_env` | Discovery filter — find all framework-managed containers |
-| `msf.vulnenv.instance_id` | Individual | `msf-{hostname}-{pid}` | Session isolation — identify which msfconsole created it |
-| `msf.vulnenv.module` | Individual | Module fullname | Module linkage — filter by target module |
-| `msf.vulnenv.env_id` | Individual | `1` | Registry cross-reference — map to in-memory ID |
-| `msf.vulnenv.payload` | **Base64 JSON** | Encoded metadata blob | Complete state reconstruction |
+| `msf.vulnenv.managed_by` | String | `test_env` | Discovery filter — find all framework-managed containers |
+| `msf.vulnenv.instance_id` | String | `msf-{hostname}-{pid}` | Session isolation — identify which msfconsole created it |
+| `msf.vulnenv.module` | String | Module fullname | Module linkage — filter by target module |
+| `msf.vulnenv.env_id` | String | `1` | Registry cross-reference — map to in-memory ID |
+| `msf.vulnenv.version` | String | `2.361` | **Version used** — not reliably in image tag |
+| `msf.vulnenv.ports` | String | `8081:8080` | **Allocated port mapping** — host:container, comma-separated |
 
-**Payload JSON Structure (before encoding):**
-```json
-{
-  "datastore": {"RHOSTS": "127.0.0.1", "RPORT": 8081},
-  "exploit_command": "set RHOSTS 127.0.0.1; set RPORT 8081; exploit",
-  "credentials": {"username": "admin", "password": "admin"},
-  "version": "2.361",
-  "created_at": "2024-06-25T17:37:00Z",
-  "runtime": "docker"
-}
+**Example:**
+
+```bash
+docker run -d \
+  --label "msf.vulnenv.managed_by=test_env" \
+  --label "msf.vulnenv.instance_id=msf-hostname-12345" \
+  --label "msf.vulnenv.module=exploit/multi/http/jenkins_script_console" \
+  --label "msf.vulnenv.env_id=1" \
+  --label "msf.vulnenv.version=2.361" \
+  --label "msf.vulnenv.ports=8081:8080" \
+  vulnhub/jenkins:2.361
 ```
 
-**Encoding/Decoding Helpers:**
-```ruby
-require 'json'
-require 'base64'
+**Why no Base64 JSON payload?**
 
-def encode_payload(data)
-  Base64.strict_encode64(data.to_json)
-end
-
-def decode_payload(encoded)
-  return nil unless encoded
-  
-  json = Base64.strict_decode64(encoded)
-  JSON.parse(json, symbolize_names: true)
-rescue ArgumentError, JSON::ParserError => e
-  print_error("Failed to decode container payload: #{e.message}")
-  nil
-end
-```
+| Concern | Resolution |
+|---------|-----------|
+| Docker label size limit (~2KB total) | Lightweight labels stay well under limit |
+| Schema evolution | Adding a new label is simpler than versioning a JSON schema |
+| No encoding/decoding complexity | No Base64, no JSON parsing errors |
 
 ### State Reconstruction From Labels (Future Enhancement)
 
@@ -203,40 +188,81 @@ end
 def reconstruct_from_labels(runtime)
   # Step 1: Discover all framework-managed containers via native filter
   containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
-  
+
   containers.each do |container|
     labels = container['Config']['Labels'] || {}
-    
+
     # Step 2: Skip containers from other msfconsole instances
     instance_id = labels['msf.vulnenv.instance_id']
     next unless instance_id == current_instance_id
-    
-    # Step 3: Decode the payload for full metadata
-    payload = decode_payload(labels['msf.vulnenv.payload'])
-    next unless payload
-    
-    # Step 4: Rebuild registry entry
+
+    # Step 3: Extract minimal dynamic data from labels
+    module_fullname = labels['msf.vulnenv.module']
     env_id = labels['msf.vulnenv.env_id'].to_i
+    version = labels['msf.vulnenv.version']
+
+    # Parse port mapping: "8081:8080,9090:61616" -> {8080=>8081, 61616=>9090}
+    ports = parse_port_label(labels['msf.vulnenv.ports'])
+
+    # Step 4: Load module and resolve its VulnerableEnvironment definition
+    mod = framework.modules.create(module_fullname)
+    next unless mod
+
+    vuln_env_meta = mod.send(:module_info)['VulnerableEnvironment']
+    next unless vuln_env_meta
+
+    definition_name = vuln_env_meta['definition']
+    profile = vuln_env_meta['profile'] || 'default'
+    overrides = vuln_env_meta['overrides'] || {}
+
+    # Step 5: Resolve environment config from YAML
+    loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+    config = loader.resolve(definition_name, version, profile, overrides)
+
+    # Step 6: Build datastore from port_mapping + allocated ports
+    datastore = { 'RHOSTS' => '127.0.0.1' }
+    vuln_env_meta['port_mapping'].each do |container_port, ds_option|
+      datastore[ds_option] = ports[container_port]
+    end
+
+    # Step 7: Reconstruct registry entry
     @environments[env_id] = {
       local_id: env_id,
       container_id: container['Id'],
-      module_fullname: labels['msf.vulnenv.module'],
-      env_version: payload[:version],
-      rhost: payload[:datastore]['RHOSTS'],
-      rport: payload[:datastore]['RPORT'],
-      runtime: payload[:runtime],
+      module_fullname: module_fullname,
+      env_version: version,
+      rhost: '127.0.0.1',
+      rport: ports.values.first,
+      runtime: runtime.name,
       image_ref: container['Config']['Image'],
       status: container['State']['Status'],
-      exploit_command: payload[:exploit_command],
-      datastore: payload[:datastore],
-      created_at: Time.parse(payload[:created_at]),
+      exploit_command: build_exploit_command(datastore),
+      datastore: datastore,
+      created_at: Time.parse(container['Created']),
       started_at: Time.parse(container['State']['StartedAt'])
     }
-    
+
     @next_id = [@next_id, env_id + 1].max
   end
 end
+
+# Parse "8081:8080,9090:61616" into {8080=>8081, 61616=>9090}
+def parse_port_label(label_value)
+  return {} unless label_value
+
+  label_value.split(',').each_with_object({}) do |pair, hash|
+    host_port, container_port = pair.split(':')
+    hash[container_port.to_i] = host_port.to_i
+  end
+end
+
+# Build exploit command from datastore
+def build_exploit_command(datastore)
+  cmds = datastore.map { |k, v| "set #{k} #{v}" }
+  cmds.join('; ') + '; exploit'
+end
 ```
+
 
 ## Phase 2: Database Integration (Week 6+)
 
