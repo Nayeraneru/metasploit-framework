@@ -80,7 +80,7 @@ This gives maximum reusability while allowing precise per-module customization.
 |-----|------|----------|-------------|
 | `name` | String | Yes | Machine-friendly identifier (matches filename) |
 | `description` | String | Yes | Human-readable description |
-| `versions` | Hash | Yes | Map of version strings to image configurations |
+| `variants` | Hash | Yes | Map of variant strings to image configurations |
 | `shared` | Hash | Yes | Base configuration inherited by all profiles |
 | `profiles` | Hash | Yes | Map of profile names to profile-specific overrides |
 
