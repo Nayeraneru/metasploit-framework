@@ -1,7 +1,7 @@
 name: activemq
 description: Apache ActiveMQ Classic with Jolokia API
 
-versions:
+variants:
   "5.18.6":
     image: apache/activemq-classic:5.18.6
 

@@ -4,7 +4,81 @@ require 'open3'
 require 'shellwords'
 
 module Msf
-  class Plugin::VulnEnv < Msf::Plugin
+  class Plugin::TestEnv < Msf::Plugin
+    # =====================================================================
+    # VulnerableEnvironment Struct
+    # =====================================================================
+
+    # Encapsulates and validates VulnerableEnvironment metadata from a module.
+    # Mirrors the framework pattern used by #name, #description, #notes, etc.
+    # but adds validation and returns a typed object instead of a raw Hash.
+    class VulnerableEnvironment
+      attr_reader :definition, :default_variant, :profile, :port_mapping, :overrides
+
+      # Required keys that must be present
+      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze
+
+      # Valid types for each key
+      SCHEMA = {
+        'definition'      => String,
+        'default_variant' => String,
+        'profile'         => String,
+        'port_mapping'    => Hash,
+        'overrides'       => Hash
+      }.freeze
+
+      def initialize(raw_hash)
+        @raw = raw_hash || {}
+
+        validate!
+
+        @definition      = @raw['definition']
+        @default_variant = @raw['default_variant']
+        @profile         = @raw['profile'] || 'default'
+        @port_mapping    = @raw['port_mapping'] || {}
+        @overrides       = @raw['overrides'] || {}
+      end
+
+      def valid?
+        errors.empty?
+      end
+
+      def errors
+        errs = []
+
+        REQUIRED_KEYS.each do |key|
+          errs << "Missing required key: '#{key}'" unless @raw.key?(key)
+        end
+
+        SCHEMA.each do |key, expected_type|
+          next unless @raw.key?(key)
+          unless @raw[key].is_a?(expected_type)
+            errs << "Key '#{key}' must be #{expected_type}, got #{@raw[key].class}"
+          end
+        end
+
+        if @raw['port_mapping'].is_a?(Hash)
+          @raw['port_mapping'].each do |k, v|
+            unless k.is_a?(Integer) || k.to_s.match?(/\A\d+\z/)
+              errs << "port_mapping key must be an integer port, got: #{k.inspect}"
+            end
+            unless v.is_a?(String)
+              errs << "port_mapping value must be a String datastore option name, got: #{v.inspect}"
+            end
+          end
+        end
+
+        errs
+      end
+
+      private
+
+      def validate!
+        errs = errors
+        raise ArgumentError, "Invalid VulnerableEnvironment: #{errs.join('; ')}" unless errs.empty?
+      end
+    end
+
     # =====================================================================
     # Runtime Abstraction Layer
     # =====================================================================
@@ -50,8 +124,42 @@ module Msf
         raise NotImplementedError, "#{self.class} must implement list"
       end
 
+      # =====================================================================
+      # Label Helpers (Shared Across Runtimes)
+      # =====================================================================
+
+      # Build container labels from environment metadata.
+      # Stores only minimal dynamic data; static metadata is reconstructible
+      # from the module's VulnerableEnvironment definition.
+      def build_labels(instance_id:, module_fullname:, env_id:, version:, ports:)
+        {
+          'msf.vulnenv.managed_by' => 'test_env',
+          'msf.vulnenv.instance_id' => instance_id,
+          'msf.vulnenv.module' => module_fullname,
+          'msf.vulnenv.env_id' => env_id.to_s,
+          'msf.vulnenv.version' => version.to_s,
+          'msf.vulnenv.ports' => encode_port_label(ports)
+        }
+      end
+
+      # Encode port mapping hash {container_port => host_port} into label string
+      # Format: "host:container,host:container" (e.g., "8081:8080,9090:61616")
+      def encode_port_label(ports)
+        ports.map { |container_port, host_port| "#{host_port}:#{container_port}" }.join(',')
+      end
+
+      # Decode port label string back into {container_port => host_port} hash
+      def decode_port_label(label_value)
+        return {} unless label_value
+
+        label_value.split(',').each_with_object({}) do |pair, hash|
+          host_port, container_port = pair.split(':')
+          hash[container_port.to_i] = host_port.to_i
+        end
+      end
+
       VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/ unless defined?(VALID_IMAGE_NAME)
-      
+
       private
 
       def validate_image_name!(image)
@@ -71,10 +179,9 @@ module Msf
     end
 
     # ============================================================
-    # DOCKER RUNTIME 
+    # DOCKER RUNTIME
     # ============================================================
     class DockerRuntime < BaseRuntime
-      
       def available?
         _out, _err, status = Open3.capture3('docker', 'version')
         status.success?
@@ -101,6 +208,7 @@ module Msf
         validate_image_name!(image)
         cmd = ['docker', 'run', '-d']
 
+        # ports: {container_port => host_port}
         ports.each do |container_port, host_port|
           cmd += ['-p', "127.0.0.1:#{host_port}:#{container_port}"]
         end
@@ -158,6 +266,7 @@ module Msf
       end
 
       def exec(container_id, command)
+        return ["", 1] if command.nil? || command.empty?
         out, err, status = Open3.capture3('docker', 'exec', container_id, *Shellwords.split(command))
         [out + err, status.exitstatus]
       end
@@ -211,13 +320,8 @@ module Msf
         if status.success?
           true
         else
-          _out2, err2, status2 = Open3.capture3('podman', 'pull', image)
-          if status2.success?
-            true
-          else
-            elog("Podman pull failed: #{err}")
-            false
-          end
+          elog("Podman pull failed for #{qualified}: #{err}")
+          false
         end
       end
 
@@ -225,6 +329,7 @@ module Msf
         validate_image_name!(image)
         cmd = ['podman', 'run', '-d']
 
+        # ports: {container_port => host_port}
         ports.each do |container_port, host_port|
           cmd += ['-p', "127.0.0.1:#{host_port}:#{container_port}"]
         end
@@ -282,6 +387,7 @@ module Msf
       end
 
       def exec(container_id, command)
+        return ["", 1] if command.nil? || command.empty?
         out, err, status = Open3.capture3('podman', 'exec', container_id, *Shellwords.split(command))
         [out + err, status.exitstatus]
       end
@@ -321,7 +427,7 @@ module Msf
     end
 
     # ============================================================
-    # RUNTIME ADAPTER 
+    # RUNTIME ADAPTER
     # ============================================================
     class RuntimeAdapter
       def self.detect(datastore = {})
@@ -426,36 +532,30 @@ module Msf
         data
       end
 
-      def resolve(name, version, profile = 'default', overrides = {})
+      def resolve(name, variant, profile = 'default', overrides = {})
         data = load(name)
 
-        # Verify version exists
-        unless data['versions'].key?(version)
-          available = data['versions'].keys.join(', ')
-          raise "Version '#{version}' not defined for '#{name}'. Available: #{available}"
+        unless data['variants'].key?(variant)
+          available = data['variants'].keys.join(', ')
+          raise "Variant '#{variant}' not defined for '#{name}'. Available: #{available}"
         end
 
-        # Verify profile exists
         unless data['profiles'].key?(profile)
           available = data['profiles'].keys.join(', ')
           raise "Profile '#{profile}' not defined for '#{name}'. Available: #{available}"
         end
 
-        # Start with a deep copy of shared
         config = deep_copy(data['shared'] || {})
 
-        # Deep-merge profile-specific overrides (minus description)
         profile_data = data['profiles'][profile].dup
         profile_data.delete('description')
         config = deep_merge(config, profile_data)
 
-        # Deep-merge module-level overrides
         config = deep_merge(config, overrides) if overrides.is_a?(Hash) && !overrides.empty?
 
-        # Attach version-specific image and build args
-        version_data = data['versions'][version]
-        config['image'] = version_data['image']
-        config['build_args'] = version_data['build_args'] if version_data['build_args']
+        variant_data = data['variants'][variant]
+        config['image'] = variant_data['image']
+        config['build_args'] = variant_data['build_args'] if variant_data['build_args']
 
         config
       end
@@ -468,46 +568,38 @@ module Msf
       private
 
       def validate!(data, filename)
-        # Rule 1: name must match filename
         unless data['name'] == filename
           raise "Validation failed: name '#{data['name']}' does not match filename '#{filename}'"
         end
 
-        # Rule 2: versions must have at least one entry
-        unless data['versions'].is_a?(Hash) && !data['versions'].empty?
-          raise "Validation failed: 'versions' must have at least one entry"
+        unless data['variants'].is_a?(Hash) && !data['variants'].empty?
+          raise "Validation failed: 'variants' must have at least one entry"
         end
 
-        # Rule 3: each version must have an image
-        data['versions'].each do |ver, cfg|
+        data['variants'].each do |var, cfg|
           unless cfg.is_a?(Hash) && cfg['image'].is_a?(String) && !cfg['image'].empty?
-            raise "Validation failed: version '#{ver}' missing valid 'image'"
+            raise "Validation failed: variant '#{var}' missing valid 'image'"
           end
         end
 
-        # Rule 4: shared.ports must have at least one entry
         unless data['shared'].is_a?(Hash) && data['shared']['ports'].is_a?(Hash) && !data['shared']['ports'].empty?
           raise "Validation failed: 'shared.ports' must have at least one entry"
         end
 
-        # Rule 5: profiles must have at least one entry
         unless data['profiles'].is_a?(Hash) && !data['profiles'].empty?
           raise "Validation failed: 'profiles' must have at least one entry"
         end
 
-        # Rule 6: profiles must contain a 'default' profile
         unless data['profiles'].key?('default')
           raise "Validation failed: 'profiles' must contain a 'default' profile"
         end
 
-        # Rule 7: profile names must match [a-z0-9-]+
         data['profiles'].keys.each do |profile_name|
           unless profile_name.to_s.match?(/\A[a-z0-9-]+\z/)
             raise "Validation failed: profile name '#{profile_name}' must match [a-z0-9-]+"
           end
         end
 
-        # Rule 8: health_check must be defined in shared or in every profile
         shared_has_health = data['shared'].is_a?(Hash) && data['shared']['health_check'].is_a?(Hash)
         unless shared_has_health
           data['profiles'].each do |name, cfg|
@@ -517,6 +609,7 @@ module Msf
           end
         end
       end
+
       def deep_copy(obj)
         Marshal.load(Marshal.dump(obj))
       end
@@ -530,7 +623,7 @@ module Msf
             new_val
           end
         end
-      end      
+      end
     end
 
     # =====================================================================
@@ -539,7 +632,6 @@ module Msf
     class ConsoleCommandDispatcher
       include Msf::Ui::Console::CommandDispatcher
 
-      # Class-level storage for runtime reference
       @@runtime = nil
 
       def self.runtime=(runtime)
@@ -551,7 +643,7 @@ module Msf
       end
 
       def name
-        'VulnEnv'
+        'TestEnv'
       end
 
       def commands
@@ -602,48 +694,34 @@ module Msf
             return
           end
 
-          # 2. Read module metadata
-          vuln_env = get_module_vuln_env(mod)
-          unless vuln_env
-            print_error("Module does not define a vulnerable environment configuration.")
-            return
-          end
+          # 2. Read and validate module metadata
+          env = vulnerable_environment(mod)
+          return unless env  # nil means missing or invalid; error already printed
 
           # 3. Parse user arguments
           options = parse_build_args(args)
 
-          # 4. Extract references
-          definition_name = vuln_env['definition']
-          unless definition_name
-            print_error("VulnEnv metadata missing required 'definition' key.")
+          # 4. Extract references from validated Struct
+          definition_name = env.definition
+          default_variant = env.default_variant
+          port_mapping    = env.port_mapping
+
+          # 5. Determine variant and profile
+          variant = options['VERSION'] || default_variant
+          profile = options['PROFILE'] || env.profile
+
+          unless variant
+            print_error("No variant specified and module has no default_variant.")
             return
           end
 
-          default_version = vuln_env['default_version']
-
-          port_mapping    = vuln_env['port_mapping'] || {}
-          if port_mapping.empty?
-            print_warning("Module has no port_mapping. You may need to set RPORT manually.")
-          end
-
-          module_overrides = vuln_env['overrides'] || {}
-
-          # 5. Determine version and profile
-          version = options['VERSION'] || default_version
-          profile = options['PROFILE'] || vuln_env['profile'] || 'default'
-
-          unless version
-            print_error("No version specified and module has no default_version.")
-            return
-          end
-
-          # 6. Load and resolve
+          # 6. Load and resolve environment definition
           loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
-          config = loader.resolve(definition_name, version, profile, module_overrides)
+          config = loader.resolve(definition_name, variant, profile, env.overrides)
 
           # 7. Display resolved configuration (Week 3 proof of concept)
           print_status("Resolving environment for #{mod.fullname}...")
-          print_status("Definition: #{definition_name} | Version: #{version} | Profile: #{profile}")
+          print_status("Definition: #{definition_name} | Variant: #{variant} | Profile: #{profile}")
           print_status("Image: #{config['image']}")
           print_status("Ports: #{config['ports'].inspect}")
           print_status("Port mapping: #{port_mapping.inspect}")
@@ -722,13 +800,12 @@ module Msf
         end
 
         if words.length == 2 && words[0] == 'build'
-          return %w[VERSION= PROFILE= RPORT=]
+          return %w[VERSION= PROFILE=]
         end
 
         if words.length == 2
           case words[0]
           when 'stop', 'start', 'remove', 'exec'
-            # TODO: Return IDs from registry in Week 6
             return []
           end
         end
@@ -738,17 +815,33 @@ module Msf
 
       private
 
-      def get_module_vuln_env(mod)
+      # Reads and validates VulnerableEnvironment metadata from the active module.
+      # Mirrors the framework pattern used by #name, #description, #notes, etc.
+      # Returns a VulnerableEnvironment Struct, or nil if the module has none.
+      def vulnerable_environment(mod)
         return nil unless mod
-        mod.send(:module_info)['VulnEnv']
+
+        raw = mod.send(:module_info)['VulnerableEnvironment']
+        return nil unless raw
+
+        VulnerableEnvironment.new(raw)
+      rescue ArgumentError => e
+        print_error("Module has invalid VulnerableEnvironment: #{e.message}")
+        nil
       end
 
+      # Parse build arguments. Only accepts known keys.
       def parse_build_args(args)
         options = {}
         args.each do |arg|
           if arg.include?('=')
             key, value = arg.split('=', 2)
-            options[key.upcase] = value
+            key = key.upcase
+            if %w[VERSION PROFILE].include?(key)
+              options[key] = value
+            else
+              print_warning("Unknown build option: #{key}. Expected: VERSION=, PROFILE=")
+            end
           end
         end
         options
@@ -763,21 +856,21 @@ module Msf
       @runtime = RuntimeAdapter.detect
       ConsoleCommandDispatcher.runtime = @runtime
       if @runtime
-        print_status("VulnEnv plugin loaded. Runtime: #{@runtime.name}")
+        print_status("TestEnv plugin loaded. Runtime: #{@runtime.name}")
       else
-        print_error("VulnEnv plugin loaded, but no container runtime found.")
+        print_error("TestEnv plugin loaded, but no container runtime found.")
         print_error("Install Docker or Podman to use test_env.")
       end
       add_console_dispatcher(ConsoleCommandDispatcher)
     end
 
     def cleanup
-      remove_console_dispatcher('VulnEnv')
+      remove_console_dispatcher('TestEnv')
       ConsoleCommandDispatcher.runtime = nil
     end
 
     def name
-      'vulnenv'
+      'test_env'
     end
 
     def desc

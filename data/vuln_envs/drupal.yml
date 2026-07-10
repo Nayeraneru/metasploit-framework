@@ -1,7 +1,7 @@
 name: drupal
 description: Drupal CMS with Drupalgeddon2 vulnerability (CVE-2018-7600)
 
-versions:
+variants:
   "CVE-2018-7600":
     image: vulnhub/drupal:CVE-2018-7600
 
