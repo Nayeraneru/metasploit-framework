@@ -48,12 +48,12 @@ msf exploit(apache_activemq_jolokia_rce) > test_env build
 
 **Input:**
 ```
-msf exploit(multi/http/jenkins_script_console) > test_env build VERSION=2.375
+msf exploit(multi/http/jenkins_script_console) > test_env build VARIANT=2.375
 ```
 
 **Expected behavior:**
-- The `VERSION=2.375` argument overrides the `default_variant` from the module's `VulnerableEnvironment`
-- The plugin loads `jenkins.yml` and selects the `2.375` entry under `versions`
+- The `VARIANT=2.375` argument overrides the `default_variant` from the module's `VulnerableEnvironment`
+- The plugin loads `jenkins.yml` and selects the variant named `2.375` from the `variants` list
 - If the version does not exist, the command fails immediately with a list of available versions
 
 **Expected output (success):**
@@ -71,7 +71,7 @@ msf exploit(multi/http/jenkins_script_console) > test_env build VERSION=2.375
 
 **Expected output (failure — version not found):**
 ```
-[-] Version '9.99' not defined for 'jenkins'. Available: 2.361, 2.375
+[-] Variant '9.99' not defined for 'jenkins'. Available: 2.361, 2.375
 ```
 
 ---
@@ -248,7 +248,7 @@ msf exploit(multi/http/jenkins_script_console) > test_env remove-all
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
-| `test_env build` | `[VERSION=x]` `[RPORT=y]` | Build and launch environment for active module |
+| `test_env build` | `[VARIANT=x]` `[RPORT=y]` | Build and launch environment for active module |
 | `test_env list` | none | Show all tracked environments |
 | `test_env exec` | `<ID>` | Execute exploit against environment `<ID>` |
 | `test_env stop` | `<ID>` | Stop a running environment |
@@ -268,6 +268,7 @@ msf exploit(multi/http/jenkins_script_console) > test_env remove-all
 | No container runtime | `[-] No container runtime found. Install Docker or Podman.` | `RuntimeAdapter.detect` returns `nil` |
 | Image pull fails | `[-] Failed to pull image: <image>` | Check exit status of `docker pull` |
 | Container start fails | `[-] Failed to start container: <error>` | Catch `RuntimeAdapter#run` exceptions |
+| Version not found in definition | `[-] Variant '{variant}' not defined for '{name}'` | Loader validates against `variants` list |
 | No available ports | `[-] No available ports in range 49152-65535` | `PortAllocator` raises after exhausting range |
 | Health check timeout | `[-] Health check timed out after <N> seconds` | `HealthManager` exceeds `retries * interval` |
 | Environment ID not found | `[-] Environment <ID> not found` | Registry lookup returns `nil` |

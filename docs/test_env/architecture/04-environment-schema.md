@@ -5,11 +5,11 @@
 I created `data/vuln_envs/jenkins.yml` and validated it with Ruby:
 
 ```bash
-ruby -e "
+ ruby -e "
 require 'yaml'
 data = YAML.safe_load(File.read('data/vuln_envs/jenkins.yml'), permitted_classes: [Symbol])
 puts 'Name: ' + data['name']
-puts 'Versions: ' + data['versions'].keys.inspect
+puts 'Variants: ' + data['variants'].map { |v| v['name'] }.inspect   # ← NEW: 'variants' list, .map
 puts 'Ports: ' + data['shared']['ports'].inspect
 puts 'Health check type: ' + data['shared']['health_check']['type']
 "
@@ -18,7 +18,7 @@ puts 'Health check type: ' + data['shared']['health_check']['type']
 Output:
 ```
 Name: jenkins
-Versions: ["2.361", "2.375"]
+Variants: ["2.361", "2.375"]
 Ports: {"http"=>8080}
 Health check type: http
 ```
@@ -80,7 +80,7 @@ This gives maximum reusability while allowing precise per-module customization.
 |-----|------|----------|-------------|
 | `name` | String | Yes | Machine-friendly identifier (matches filename) |
 | `description` | String | Yes | Human-readable description |
-| `variants` | Hash | Yes | Map of variant strings to image configurations |
+| `variants` | Array | Yes | List of variant configurations |
 | `shared` | Hash | Yes | Base configuration inherited by all profiles |
 | `profiles` | Hash | Yes | Map of profile names to profile-specific overrides |
 
@@ -93,7 +93,7 @@ different backends, plugins, or build options for the same version.
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `name` | String | Yes | Unique identifier for this variant. Used in `test_env build VARIANT=...` |
-| `version` | String | No | The actual software version. For information and future validation (e.g., Rapid7#21583) |
+| `version` | String | Yes | The actual software version. For information and future validation (e.g., Rapid7#21583) |
 | `image` | String | Yes | OCI image reference |
 | `build_args` | Hash | No | Docker build arguments |
 | `default` | Boolean | No | If `true`, this variant is selected when no `VARIANT` is specified. Only one variant may be `default` |
@@ -253,7 +253,7 @@ When `test_env build` resolves an environment definition, the loader performs a 
 4. Start with a copy of `shared`.
 5. Deep-merge the selected profile's configuration into it.
 6. Deep-merge the module's `VulnerableEnvironment['overrides']` (if any).
-7. Attach the variant-specific `image`, `version`, and `build_args` from `variants[variant]`.
+7. Attach the variant-specific `image`, `version`, and `build_args` from the matching variant in the `variants` list.
 
 ### Error Cases
 
@@ -269,7 +269,7 @@ When `test_env build` resolves an environment definition, the loader performs a 
 The `EnvironmentDefinitionLoader` exposes:
 
 - `load(name)` — Parse and validate a definition file.
-- `resolve(name, version, profile, overrides)` — Return the fully merged configuration for a specific environment instance.
+- `resolve(name, variant, profile, overrides)` — Return the fully merged configuration for a specific environment instance.
 - `available_definitions` — List all `.yml` files in `data/vuln_envs/`.
 ## Module Metadata Integration
 
@@ -315,82 +315,6 @@ Modules reference a definition and optionally a profile. See [02-module-metadata
 }
 ```
 
-## Reference Implementation: jenkins.yml
-
-```yaml
-name: jenkins
-description: Jenkins CI server with Groovy Script Console
-
-variants:
-  - name: "2.361"
-    version: "2.361"
-    image: vulnhub/jenkins:2.361
-    build_args:
-      JENKINS_VERSION: "2.361"
-    default: true
-
-  - name: "2.361-postgres"
-    version: "2.361"
-    image: vulnhub/jenkins:2.361-pg
-    build_args:
-      JENKINS_VERSION: "2.361"
-      DB_BACKEND: "postgresql"
-
-  - name: "2.375"
-    version: "2.375"
-    image: vulnhub/jenkins:2.375
-    build_args:
-      JENKINS_VERSION: "2.375"
-
-shared:
-  ports:
-    http: 8080
-
-  volumes:
-    jenkins_home:
-      container_path: /var/jenkins_home
-      persist: false
-
-  credentials:
-    default:
-      username: admin
-      password: admin
-
-  datastore_defaults:
-    TARGETURI: /script
-
-  ci:
-    exploit:
-      payload: java/meterpreter/reverse_tcp
-      options:
-        LHOST: 127.0.0.1
-        LPORT: 4444
-    validation:
-      expected_session: true
-      session_type: meterpreter
-      expected_output: "uid="
-      timeout: 120
-
-profiles:
-  default:
-    description: Standard Jenkins with HTTP enabled
-    health_check:
-      type: http
-      path: /login
-      expected_status: 200
-      interval: 5
-      timeout: 2
-      retries: 12
-
-  http-stopped:
-    description: Jenkins with HTTP stopped for config-drop exploit
-    health_check:
-      type: tcp
-      port: 8080
-      interval: 5
-      timeout: 2
-      retries: 12
-```
 
 ## Integration With Registry
 
