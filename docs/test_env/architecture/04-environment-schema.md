@@ -5,11 +5,11 @@
 I created `data/vuln_envs/jenkins.yml` and validated it with Ruby:
 
 ```bash
-ruby -e "
+ ruby -e "
 require 'yaml'
 data = YAML.safe_load(File.read('data/vuln_envs/jenkins.yml'), permitted_classes: [Symbol])
 puts 'Name: ' + data['name']
-puts 'Versions: ' + data['versions'].keys.inspect
+puts 'Variants: ' + data['variants'].map { |v| v['name'] }.inspect   # ← NEW: 'variants' list, .map
 puts 'Ports: ' + data['shared']['ports'].inspect
 puts 'Health check type: ' + data['shared']['health_check']['type']
 "
@@ -18,7 +18,7 @@ puts 'Health check type: ' + data['shared']['health_check']['type']
 Output:
 ```
 Name: jenkins
-Versions: ["2.361", "2.375"]
+Variants: ["2.361", "2.375"]
 Ports: {"http"=>8080}
 Health check type: http
 ```
