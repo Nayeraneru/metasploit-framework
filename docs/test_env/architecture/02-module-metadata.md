@@ -322,7 +322,7 @@ vulnerable_environment(mod) → VulnerableEnvironment Struct or nil
 if nil: print_error("Module does not define a vulnerable environment configuration.")
     ↓
 if present:
-    env.definition      => 'jenkins'
+    env.definition      => 'jenkins' # maps to variant 'name' in the YAML list
     env.default_variant => '2.361'
     env.profile         => 'default'
     env.port_mapping    => {8080 => 'RPORT'}
@@ -344,5 +344,5 @@ if present:
 | Invalid port_mapping key | "port_mapping key must be an integer port, got: 'abc'" |
 | Invalid port_mapping value | "port_mapping value must be a String datastore option name, got: 123" |
 | Definition file not found | "Environment definition not found: data/vuln_envs/{name}.yml" |
-| Version not found in definition | "Variant '{variant}' not defined for '{name}'" |
+| Variant not found in definition | "Variant '{variant}' not defined for '{name}'" |
 | Profile not found in definition | "Profile '{profile}' not defined for '{name}'" |
