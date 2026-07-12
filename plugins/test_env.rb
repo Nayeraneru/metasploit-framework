@@ -868,7 +868,7 @@ module Msf
             if %w[VARIANT PROFILE].include?(key)
               options[key] = value
             else
-              print_warning("Unknown build option: #{key}. Expected: VERSION=, PROFILE=")
+              print_warning("Unknown build option: #{key}. Expected: VARIANT=, PROFILE=")
             end
           end
         end
