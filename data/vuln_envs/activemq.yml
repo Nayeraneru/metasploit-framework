@@ -18,7 +18,7 @@ shared:
       password: admin
 
   datastore_defaults:
-    TARGETURI: /api/jolokia/
+    TARGETURI: /
 
   health_check:
     type: http
@@ -42,4 +42,4 @@ shared:
 
 profiles:
   default:
-    description: Standard ActiveMQ with web console and broker
+    description: Standard Apache ActiveMQ with web console and broker
