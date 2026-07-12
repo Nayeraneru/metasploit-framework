@@ -86,35 +86,41 @@ This gives maximum reusability while allowing precise per-module customization.
 
 ### variants Section
 
-Each variant is a key-value pair:
-- **Key**: Variant identifier (arbitrary string, e.g., `"2.361"`, `"2.361-postgres"`, `"latest"`)
-- **Value**: Hash with variant-specific configuration
+A list of configuration variants for this service. Each variant is a distinct
+runnable configuration — typically a software version, but may also represent
+different backends, plugins, or build options for the same version.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
+| `name` | String | Yes | Unique identifier for this variant. Used in `test_env build VARIANT=...` |
+| `version` | String | No | The actual software version. For information and future validation (e.g., Rapid7#21583) |
 | `image` | String | Yes | OCI image reference |
-| `version` | String | No | Actual software version (informational, e.g., `"2.361"`) |
 | `build_args` | Hash | No | Docker build arguments |
+| `default` | Boolean | No | If `true`, this variant is selected when no `VARIANT` is specified. Only one variant may be `default` |
 
 Example:
 ```yaml
 variants:
-  "2.361":
-    image: vulnhub/jenkins:2.361
+  - name: "2.361"
     version: "2.361"
+    image: vulnhub/jenkins:2.361
     build_args:
       JENKINS_VERSION: "2.361"
-  "2.361-postgres":
-    image: vulnhub/jenkins:2.361-postgres
+    default: true
+
+  - name: "2.361-postgres"
     version: "2.361"
+    image: vulnhub/jenkins:2.361-pg
     build_args:
       JENKINS_VERSION: "2.361"
       DB_BACKEND: "postgresql"
-  "2.375":
-    image: vulnhub/jenkins:2.375
-    version: "2.375"
-```
 
+  - name: "2.375"
+    version: "2.375"
+    image: vulnhub/jenkins:2.375
+    build_args:
+      JENKINS_VERSION: "2.375"
+```
 ### shared Section
 
 Base configuration inherited by all profiles. Any field here can be overridden by a profile or by module-level metadata.
@@ -210,14 +216,16 @@ Each profile is a key-value pair:
 ## Validation Rules
 
 1. `name` must match filename (without `.yml`)
-2. `variants` must have at least one entry
-3. Each variant must have an `image`
-4. `shared.ports` must have at least one entry
-5. `profiles` must have at least one entry
-6. `profiles` must contain a `default` profile
-7. Profile names must match `[a-z0-9-]+`
-8. `health_check` must be defined in `shared` or in every profile
-9. Module-level `overrides` are deep-merged into the final profile config
+2. `variants` must be a non-empty list
+3. Each variant must have a `name` and `image`
+4. Variant `name` must be unique across all variants
+5. At most one variant may have `default: true`
+6. `shared.ports` must have at least one entry
+7. `profiles` must have at least one entry
+8. `profiles` must contain a `default` profile
+9. Profile names must match `[a-z0-9-]+`
+10. `health_check` must be defined in `shared` or in every profile
+11. Module-level `overrides` are deep-merged into the final profile config
 
 ## Resolution & Merge Logic
 
@@ -314,23 +322,25 @@ name: jenkins
 description: Jenkins CI server with Groovy Script Console
 
 variants:
-  "2.361":
-    image: vulnhub/jenkins:2.361
+  - name: "2.361"
     version: "2.361"
+    image: vulnhub/jenkins:2.361
     build_args:
       JENKINS_VERSION: "2.361"
-  "2.361-postgres":
-    image: vulnhub/jenkins:2.361-postgres
+    default: true
+
+  - name: "2.361-postgres"
     version: "2.361"
+    image: vulnhub/jenkins:2.361-pg
     build_args:
       JENKINS_VERSION: "2.361"
       DB_BACKEND: "postgresql"
-  "2.375":
-    image: vulnhub/jenkins:2.375
+
+  - name: "2.375"
     version: "2.375"
+    image: vulnhub/jenkins:2.375
     build_args:
       JENKINS_VERSION: "2.375"
-
 
 shared:
   ports:
