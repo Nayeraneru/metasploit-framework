@@ -30,7 +30,7 @@ shared:
       password: admin
 
   datastore_defaults:
-    TARGETURI: /script
+    TARGETURI: /
 
   health_check:
     type: http
