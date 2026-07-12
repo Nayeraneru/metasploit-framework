@@ -2,11 +2,15 @@ name: jenkins
 description: Jenkins CI server with Groovy Script Console
 
 variants:
-  "2.361":
+  - name: "2.361"
+    version: "2.361"
     image: vulnhub/jenkins:2.361
     build_args:
       JENKINS_VERSION: "2.361"
-  "2.375":
+    default: true
+
+  - name: "2.375"
+    version: "2.375"
     image: vulnhub/jenkins:2.375
     build_args:
       JENKINS_VERSION: "2.375"

@@ -556,8 +556,9 @@ module Msf
       def resolve(name, variant, profile = 'default', overrides = {})
         data = load(name)
 
-        unless data['variants'].key?(variant)
-          available = data['variants'].keys.join(', ')
+        variant_cfg = data['variants'].find { |v| v['name'] == variant }
+        unless variant_cfg
+          available = data['variants'].map { |v| v['name'] }.join(', ')
           raise "Variant '#{variant}' not defined for '#{name}'. Available: #{available}"
         end
 
@@ -574,9 +575,8 @@ module Msf
 
         config = deep_merge(config, overrides) if overrides.is_a?(Hash) && !overrides.empty?
 
-        variant_data = data['variants'][variant]
-        config['image'] = variant_data['image']
-        config['build_args'] = variant_data['build_args'] if variant_data['build_args']
+        config['image'] = variant_cfg['image']
+        config['build_args'] = variant_cfg['build_args'] if variant_cfg['build_args']
 
         config
       end
@@ -593,13 +593,16 @@ module Msf
           raise "Validation failed: name '#{data['name']}' does not match filename '#{filename}'"
         end
 
-        unless data['variants'].is_a?(Hash) && !data['variants'].empty?
-          raise "Validation failed: 'variants' must have at least one entry"
+        unless data['variants'].is_a?(Array) && !data['variants'].empty?
+          raise "Validation failed: 'variants' must be a non-empty list"
         end
 
-        data['variants'].each do |var, cfg|
-          unless cfg.is_a?(Hash) && cfg['image'].is_a?(String) && !cfg['image'].empty?
-            raise "Validation failed: variant '#{var}' missing valid 'image'"
+        data['variants'].each do |cfg|
+          unless cfg.is_a?(Hash) && cfg['name'].is_a?(String) && !cfg['name'].empty?
+            raise "Validation failed: variant missing valid 'name'"
+          end
+          unless cfg['image'].is_a?(String) && !cfg['image'].empty?
+            raise "Validation failed: variant '#{cfg['name']}' missing valid 'image'"
           end
         end
 
@@ -728,7 +731,7 @@ module Msf
           port_mapping    = env.port_mapping
 
           # 5. Determine variant and profile
-          variant = options['VERSION'] || default_variant
+          variant = options['VARIANT'] || default_variant
           profile = options['PROFILE'] || env.profile
 
           unless variant
@@ -825,7 +828,7 @@ module Msf
         end
 
         if words.length == 2 && words[0] == 'build'
-          return %w[VERSION= PROFILE=]
+          return %w[VARIANT= PROFILE=]
         end
 
         if words.length == 2
@@ -862,7 +865,7 @@ module Msf
           if arg.include?('=')
             key, value = arg.split('=', 2)
             key = key.upcase
-            if %w[VERSION PROFILE].include?(key)
+            if %w[VARIANT PROFILE].include?(key)
               options[key] = value
             else
               print_warning("Unknown build option: #{key}. Expected: VERSION=, PROFILE=")
