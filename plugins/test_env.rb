@@ -720,8 +720,11 @@ module Msf
 
           # 2. Read and validate module metadata
           env = vulnerable_environment(mod)
-          return unless env  # nil means missing or invalid; error already printed
-
+          unless env
+            print_error("Module does not define a vulnerable environment configuration.")
+            return
+          end
+          
           # 3. Parse user arguments
           options = parse_build_args(args)
 
