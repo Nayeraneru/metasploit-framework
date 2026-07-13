@@ -537,6 +537,101 @@ module Msf
     end
 
     # =====================================================================
+    # Built Environment Registry (Phase 1: In-Memory Only)
+    # =====================================================================
+    class BuiltEnvironmentRegistry
+      attr_reader :environments, :framework
+
+      def initialize(framework)
+        @framework = framework
+        @environments = {}  # local_id => Hash
+        @next_id = 1
+        @mutex = Mutex.new   # Thread-safe for concurrent access
+      end
+
+      def register(container_id:, module_fullname:, rhost:, rport:,
+                   version: nil, runtime: 'docker', image_ref:,
+                   exploit_command:, datastore: {})
+        @mutex.synchronize do
+          id = @next_id
+          @next_id += 1
+
+          @environments[id] = {
+            local_id: id,
+            container_id: container_id,
+            module_fullname: module_fullname,
+            env_version: version,
+            rhost: rhost,
+            rport: rport,
+            runtime: runtime,
+            image_ref: image_ref,
+            status: 'running',
+            exploit_command: exploit_command,
+            datastore: datastore,
+            created_at: Time.now,
+            started_at: Time.now
+          }
+
+          id
+        end
+      end
+
+      def get(id)
+        @environments[id]
+      end
+
+      def list
+        @environments.values.sort_by { |e| e[:local_id] }
+      end
+
+      def update_status(id, status)
+        @mutex.synchronize do
+          return unless @environments[id]
+          @environments[id][:status] = status
+          @environments[id][:updated_at] = Time.now
+          @environments[id][:stopped_at] = Time.now if status == 'stopped'
+          @environments[id][:started_at] = Time.now if status == 'running'
+        end
+      end
+
+      def remove(id)
+        @mutex.synchronize do
+          return unless @environments[id]
+          @environments[id][:status] = 'removed'
+          @environments[id][:removed_at] = Time.now
+          @environments[id].delete(:local_id)
+        end
+      end
+
+      def remove_all
+        @mutex.synchronize do
+          @environments.each_value do |env|
+            env[:status] = 'removed'
+            env[:removed_at] = Time.now
+          end
+          @environments.clear
+          @next_id = 1
+        end
+      end
+
+      def find_by_container(container_id)
+        @environments.values.find { |e| e[:container_id] == container_id }
+      end
+
+      def find_by_module(module_fullname)
+        @environments.values.select { |e| e[:module_fullname] == module_fullname }
+      end
+
+      def used_ports
+        @environments.values.map { |e| e[:rport] }
+      end
+
+      def running?
+        @environments.values.any? { |e| e[:status] == 'running' }
+      end
+    end
+
+    # =====================================================================
     # Environment Definition Loader
     # =====================================================================
     class EnvironmentDefinitionLoader
@@ -831,7 +926,7 @@ module Msf
         end
 
         if words.length == 2 && words[0] == 'build'
-          return %w[VARIANT= PROFILE=]
+          return %w[VARIANT= PROFILE= RPORT=]
         end
 
         if words.length == 2
@@ -868,7 +963,7 @@ module Msf
           if arg.include?('=')
             key, value = arg.split('=', 2)
             key = key.upcase
-            if %w[VARIANT PROFILE].include?(key)
+            if %w[VARIANT PROFILE RPORT].include?(key)
               options[key] = value
             else
               print_warning("Unknown build option: #{key}. Expected: VARIANT=, PROFILE=")
