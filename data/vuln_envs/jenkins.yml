@@ -1,12 +1,16 @@
 name: jenkins
-description: Jenkins CI server with Groovy Script Console enabled
+description: Jenkins CI server with Groovy Script Console
 
-versions:
-  "2.361":
+variants:
+  - name: "2.361"
+    version: "2.361"
     image: vulnhub/jenkins:2.361
     build_args:
       JENKINS_VERSION: "2.361"
-  "2.375":
+    default: true
+
+  - name: "2.375"
+    version: "2.375"
     image: vulnhub/jenkins:2.375
     build_args:
       JENKINS_VERSION: "2.375"
@@ -20,6 +24,14 @@ shared:
       container_path: /var/jenkins_home
       persist: false
 
+  credentials:
+    default:
+      username: admin
+      password: admin
+
+  datastore_defaults:
+    TARGETURI: /
+
   health_check:
     type: http
     path: /login
@@ -27,14 +39,6 @@ shared:
     interval: 5
     timeout: 2
     retries: 12
-
-  credentials:
-    default:
-      username: admin
-      password: admin
-
-  datastore_defaults:
-    TARGETURI: /script
 
   ci:
     exploit:
@@ -47,3 +51,16 @@ shared:
       session_type: meterpreter
       expected_output: "uid="
       timeout: 120
+
+profiles:
+  default:
+    description: Standard Jenkins with HTTP enabled
+
+  http-stopped:
+    description: Jenkins with HTTP stopped for config-drop exploit
+    health_check:
+      type: tcp
+      port: 8080
+      interval: 5
+      timeout: 2
+      retries: 12

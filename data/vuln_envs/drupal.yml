@@ -1,0 +1,39 @@
+name: drupal
+description: Drupal CMS with Drupalgeddon2 vulnerability (CVE-2018-7600)
+
+variants:
+  - name: "CVE-2018-7600"
+    version: "7.57"
+    image: vulnhub/drupal:CVE-2018-7600
+    default: true
+
+shared:
+  ports:
+    http: 80
+
+  datastore_defaults:
+    TARGETURI: /
+
+  health_check:
+    type: http
+    path: /
+    expected_status: 200
+    interval: 5
+    timeout: 2
+    retries: 12
+
+  ci:
+    exploit:
+      payload: php/meterpreter/reverse_tcp
+      options:
+        LHOST: 127.0.0.1
+        LPORT: 4444
+    validation:
+      expected_session: true
+      session_type: meterpreter
+      expected_output: "uid="
+      timeout: 120
+
+profiles:
+  default:
+    description: Standard Drupal with HTTP enabled
