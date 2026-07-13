@@ -753,6 +753,14 @@ module Msf
 
       @@runtime = nil
 
+      def self.registry=(registry)
+        @@registry = registry
+      end
+
+      def self.registry
+        @@registry
+      end
+
       def self.runtime=(runtime)
         @@runtime = runtime
       end
@@ -980,7 +988,11 @@ module Msf
     def initialize(framework, opts)
       super
       @runtime = RuntimeAdapter.detect
+      @registry = BuiltEnvironmentRegistry.new(framework)
+
       ConsoleCommandDispatcher.runtime = @runtime
+      ConsoleCommandDispatcher.registry = @registry
+
       if @runtime
         print_status("TestEnv plugin loaded. Runtime: #{@runtime.name}")
         # Verify rootless Podman when applicable
@@ -998,6 +1010,7 @@ module Msf
     def cleanup
       remove_console_dispatcher('TestEnv')
       ConsoleCommandDispatcher.runtime = nil
+      ConsoleCommandDispatcher.registry = nil
     end
 
     def name
