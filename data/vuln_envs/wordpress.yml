@@ -1,15 +1,20 @@
-name: drupal
-description: Drupal CMS with Drupalgeddon2 vulnerability (CVE-2018-7600)
+name: wordpress
+description: Vulnerable WordPress installation for security testing
 
 variants:
-  - name: "CVE-2018-7600"
-    version: "7.57"
-    image: vulnhub/drupal:CVE-2018-7600
+  - name: "latest"
+    version: "4.9"
+    image: eystsen/vulnerablewordpress
     default: true
 
 shared:
   ports:
     http: 80
+
+  credentials:
+    default:
+      username: admin
+      password: admin
 
   datastore_defaults:
     TARGETURI: /
@@ -18,9 +23,9 @@ shared:
     type: http
     path: /
     expected_status: 200
-    interval: 5
+    interval: 3
     timeout: 2
-    retries: 12
+    retries: 10
 
   ci:
     exploit:
@@ -36,4 +41,4 @@ shared:
 
 profiles:
   default:
-    description: Standard Drupal with HTTP enabled
+    description: Standard vulnerable WordPress
