@@ -20,22 +20,18 @@ Environment provisioning and exploit execution are time-consuming operations. To
 
 ## Directory Structure
 
-This directory structure will be created as part of the project:
-
 ```
 metasploit-framework/
 ├── ci/                          
 │   ├── test_activemq.rc         
-│   ├── test_jenkins.rc          
-│   └── test_drupal.rc           
+│   └── test_wordpress.rc           
 ├── .github/
 │   └── workflows/
 │       └── vuln-env-test.yml    
 ├── data/
 │   └── vuln_envs/
 │       ├── activemq.yml         
-│       ├── jenkins.yml          
-│       └── drupal.yml          
+│       └── wordpress.yml          
 └── docs/
     └── ci_workflow.md           
 ```
@@ -50,15 +46,15 @@ A **resource script** with a `.rc` extension contains msfconsole commands. Inste
 
 Metasploit reads the file and executes each line automatically, as if it's typed.
 
-### Example: ci/test_jenkins.rc
+### Example: ci/test_activemq.rc
 
-**What it is:** A text file containing msfconsole commands to test the Jenkins module automatically.
+**What it is:** A text file containing msfconsole commands to test the ActiveMQ module automatically.
 
 **What it contains:**
 ```text
 load test_env
-use exploit/multi/http/jenkins_script_console
-test_env build VERSION=2.361
+use exploit/multi/http/apache_activemq_jolokia_rce
+test_env build
 test_env exec 1
 test_env remove-all
 exit
@@ -68,15 +64,15 @@ exit
 | Line | Command | Purpose |
 |------|---------|---------|
 | 1 | `load test_env` | Load the test_env plugin |
-| 2 | `use exploit/multi/http/jenkins_script_console` | Select the exploit module |
-| 3 | `test_env build VERSION=2.361` | Build environment using Jenkins version 2.361 |
+| 2 | `use exploit/multi/http/apache_activemq_jolokia_rce` | Select the exploit module |
+| 3 | `test_env build` | Build environment for active module |
 | 4 | `test_env exec 1` | Execute exploit against environment ID 1 |
 | 5 | `test_env remove-all` | Stop and remove all containers |
 | 6 | `exit` | Close msfconsole |
 
 **How to run it manually (for testing):**
 ```bash
-./msfconsole -q -r ci/test_jenkins.rc
+./msfconsole -q -r ci/test_activemq.rc
 ```
 
 ## GitHub Actions Workflow
@@ -103,8 +99,8 @@ on:
     types: [labeled]
 
 jobs:
-  test-jenkins:
-    name: Test Jenkins Script Console
+  test-activemq:
+    name: Test Apache ActiveMQ Jolokia RCE
     runs-on: ubuntu-latest
     
     # Skip PRs without the vuln-env-test label
@@ -133,9 +129,58 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-
       
-      - name: Run Jenkins exploit test
+      - name: Run ActiveMQ exploit test
         run: |
-          ./msfconsole -q -r ci/test_jenkins.rc
+          ./msfconsole -q -r ci/test_activemq.rc
+      
+      - name: Verify session was created
+        run: |
+          grep "Session.*opened" ~/.msf4/logs/framework.log || echo "WARNING: No session log found"
+      
+      - name: Verify no containers left behind
+        run: |
+          REMAINING=$(docker ps -q | wc -l)
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "Clean: No containers remaining"
+          else
+            echo "FAIL: $REMAINING container(s) still running"
+            docker ps
+            exit 1
+          fi
+
+  test-wordpress:
+    name: Test WordPress Admin Shell Upload
+    runs-on: ubuntu-latest
+    
+    # Skip PRs without the vuln-env-test label
+    if: |
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'vuln-env-test')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+      
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      
+      - name: Run WordPress exploit test
+        run: |
+          ./msfconsole -q -r ci/test_wordpress.rc
       
       - name: Verify session was created
         run: |
@@ -160,7 +205,7 @@ jobs:
 | Set up Ruby | `ruby/setup-ruby@v1` | Install Ruby 3.2 and gems |
 | Set up Docker | `docker/setup-buildx-action@v3` | Install Docker |
 | Cache Docker layers | `actions/cache@v3` | Speed up image pulls |
-| Run exploit test | `./msfconsole -q -r ci/test_jenkins.rc` | Execute the Jenkins resource script |
+| Run exploit test | `./msfconsole -q -r ci/test_activemq.rc` | Execute the ActiveMQ resource script |
 | Verify session | `grep "Session.*opened"` | Confirm exploit succeeded |
 | Verify cleanup | `docker ps -q` | Confirm no leaked containers |
 
@@ -178,7 +223,7 @@ jobs:
 Environment definitions include a `ci` section so the automation knows what payload to use and what to validate:
 
 ```yaml
-# data/vuln_envs/jenkins.yml
+# data/vuln_envs/activemq.yml
 ci:
   exploit:
     payload: java/meterpreter/reverse_tcp

@@ -16,9 +16,9 @@ This directory contains the architecture and workflow design for the `test_env` 
 
 | Document | Description |
 |----------|-------------|
-| [reference_modules.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/reference_modules.md) | 3 reference modules selected for implementation (ActiveMQ, Jenkins, Drupal) |
-| [workflow.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/workflow.md) | Target user workflows and console transcripts (acceptance criteria) |
-| [ci_workflow.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/ci_workflow.md) | GitHub Actions CI integration with resource scripts |
+| [reference_modules.md](reference_modules.md) | 2 reference modules selected for implementation (ActiveMQ, WordPress) |
+| [workflow.md](workflow.md) | Target user workflows and console transcripts (acceptance criteria) |
+| [ci_workflow.md](ci_workflow.md) | GitHub Actions CI integration with resource scripts |
 
 ## Plugin File
 
@@ -47,4 +47,5 @@ Commands:
 
 ## Data Files
 
-- [data/vuln_envs/jenkins.ym](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/data/vuln_envs/jenkins.yml) — Reference environment definition (Week 1 draft)
+- `data/vuln_envs/activemq.yml` — ActiveMQ environment definition
+- `data/vuln_envs/wordpress.yml` — WordPress environment definition
