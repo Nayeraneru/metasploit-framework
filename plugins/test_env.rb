@@ -552,11 +552,11 @@ module Msf
     # =====================================================================
     class BuiltEnvironment
       attr_reader :local_id, :container_id, :module_fullname, :env_version,
-                  :runtime, :image_ref, :status, :exploit_command,
-                  :datastore, :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
+                  :runtime, :image_ref, :status, :datastore, :created_at, 
+                  :started_at, :stopped_at, :removed_at, :temp_dirs
 
       def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
-                     runtime:, image_ref:, exploit_command:, datastore: {},
+                     runtime:, image_ref:, datastore: {},
                      created_at: Time.now, started_at: Time.now, temp_dirs: [])
         @local_id        = local_id
         @container_id    = container_id
@@ -565,7 +565,6 @@ module Msf
         @runtime         = runtime
         @image_ref       = image_ref
         @status          = :running
-        @exploit_command = exploit_command
         @datastore       = datastore.dup.freeze  # Prevent external mutation
         @created_at      = created_at
         @started_at      = started_at
@@ -609,6 +608,11 @@ module Msf
       def mark_removed
         @status = :removed
         @removed_at = Time.now
+      end
+
+      # construct exploit command dynamically from current datastore
+      def exploit_command
+        datastore.map { |k, v| "set #{k} #{v}" }.join('; ') + '; exploit'
       end
 
       # Convert to hash for serialization (DB Phase 2) or table output
@@ -656,7 +660,7 @@ module Msf
       end
 
       def register(container_id:, module_fullname:, env_version: nil,
-                   runtime:, image_ref:, exploit_command:, datastore: {}, temp_dirs: [])
+                   runtime:, image_ref:, datastore: {}, temp_dirs: [])
         @mutex.synchronize do
           id = @next_id
           @next_id += 1
@@ -668,7 +672,6 @@ module Msf
             env_version: env_version,
             runtime: runtime,
             image_ref: image_ref,
-            exploit_command: exploit_command,
             datastore: datastore,
             temp_dirs: temp_dirs
           )
@@ -679,7 +682,7 @@ module Msf
       end
 
       def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
-                           runtime:, image_ref:, exploit_command:, datastore: {}, temp_dirs: [])
+                           runtime:, image_ref:, datastore: {}, temp_dirs: [])
         @mutex.synchronize do
           env = BuiltEnvironment.new(
             local_id: env_id,
@@ -688,7 +691,6 @@ module Msf
             env_version: env_version,
             runtime: runtime,
             image_ref: image_ref,
-            exploit_command: exploit_command,
             datastore: datastore,
             temp_dirs: temp_dirs
           )
@@ -1130,11 +1132,8 @@ module Msf
 
           # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
 
-          # 15. Build exploit command string
-          exploit_cmds = datastore.map { |k, v| "set #{k} #{v}" }
-          exploit_command = exploit_cmds.join('; ') + '; exploit'
 
-          # 16. Pass the pre-reserved env_id
+          # 15. Pass the pre-reserved env_id
           self.class.registry.register_with_id(
             env_id: env_id,
             container_id: container_id,
@@ -1142,7 +1141,6 @@ module Msf
             env_version: variant,
             runtime: runtime.name,
             image_ref: config['image'],
-            exploit_command: exploit_command,
             datastore: datastore,
             temp_dirs: temp_dirs
           )
@@ -1150,7 +1148,7 @@ module Msf
 
           registered = true
 
-          # 17. Apply datastore to the active module
+          # 16. Apply datastore to the active module
           datastore.each do |key, value|
             mod.datastore[key] = value
           end
@@ -1160,7 +1158,7 @@ module Msf
           # health = config['health_check']
           # HealthManager.new(runtime, container_id, health).wait
 
-          # 18. Display results to user
+          # 17. Display results to user
           print_good("Environment ready.")
           print_status("Environment ID: #{env_id}")
           datastore.each do |key, value|
@@ -1173,7 +1171,8 @@ module Msf
             print_status("   #{'PASSWORD'.ljust(12)} => #{creds['password']}")
           end
 
-          print_status("Suggested: #{exploit_command}")
+          env = self.class.registry.get(env_id)
+          print_status("Suggested: #{env.exploit_command}")
 
         rescue PortAllocator::NoPortsAvailable => e
           print_error("No available ports: #{e.message}")
