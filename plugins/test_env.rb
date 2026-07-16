@@ -628,7 +628,8 @@ module Msf
           created_at: created_at,
           started_at: started_at,
           stopped_at: stopped_at,
-          removed_at: removed_at
+          removed_at: removed_at,
+          temp_dirs: temp_dirs
         }
       end
     end
@@ -668,7 +669,7 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             exploit_command: exploit_command,
-            datastore: datastore
+            datastore: datastore,
             temp_dirs: temp_dirs
           )
 
@@ -678,7 +679,7 @@ module Msf
       end
 
       def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
-                           runtime:, image_ref:, exploit_command:, datastore: {})
+                           runtime:, image_ref:, exploit_command:, datastore: {}, temp_dirs: [])
         @mutex.synchronize do
           env = BuiltEnvironment.new(
             local_id: env_id,
@@ -688,7 +689,8 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             exploit_command: exploit_command,
-            datastore: datastore
+            datastore: datastore,
+            temp_dirs: temp_dirs
           )
 
           @environments[env_id] = env
@@ -718,25 +720,43 @@ module Msf
       end
 
       def remove(id)
+        dirs_to_clean = []
+        
         @mutex.synchronize do
           env = @environments[id]
           return unless env
 
-          # Clean up temp directories
-          env.temp_dirs.each do |dir|
-            FileUtils.rm_rf(dir) if Dir.exist?(dir)
-          end
-
+          dirs_to_clean = env.temp_dirs.dup
           env.mark_removed
           @environments.delete(id)
+        end
+        
+        # cleanup outside mutex
+        dirs_to_clean.each do |dir|
+          FileUtils.rm_rf(dir) if Dir.exist?(dir)
         end
       end
 
       def remove_all
+        # collect temp directories and mark removed under mutex
+        # but do the actual filesystem cleanup AFTER releasing the mutex
+        envs_to_clean = []
+        
         @mutex.synchronize do
-          @environments.each_value(&:mark_removed)
+          @environments.each_value do |env|
+            envs_to_clean << env.temp_dirs
+            env.mark_removed
+          end
           @environments.clear
           @next_id = 1
+        end
+        
+        # slow filesystem operations happen OUTSIDE the mutex
+        # other threads can now use the registry freely
+        envs_to_clean.each do |dirs|
+          dirs.each do |dir|
+            FileUtils.rm_rf(dir) if Dir.exist?(dir)
+          end
         end
       end
 
@@ -940,6 +960,9 @@ module Msf
 
       def cmd_test_env_build(args)
         begin
+          container_id = nil   # Track for cleanup
+          registered = false # Track whether registration succeeded
+          
           # 1. Preconditions
           mod = driver.active_module
           unless mod
@@ -963,8 +986,8 @@ module Msf
           port_mapping    = env.port_mapping
 
           # 5. Determine variant and profile
-          variant = options['VARIANT'] || default_variant
-          profile = options['PROFILE'] || env.profile
+          variant = options['VARIANT'].to_s.empty? ? default_variant : options['VARIANT']
+          profile = options['PROFILE'].to_s.empty? ? env.profile : options['PROFILE']
 
           unless variant
             print_error("No variant specified and module has no default_variant.")
@@ -1063,6 +1086,7 @@ module Msf
           container_info = runtime.inspect(container_id)
           unless container_info
             print_error("Container started but inspect failed immediately.")
+            runtime.remove(container_id)
             return
           end
 
@@ -1109,11 +1133,12 @@ module Msf
             runtime: runtime.name,
             image_ref: config['image'],
             exploit_command: exploit_command,
-            datastore: datastore
+            datastore: datastore,
             temp_dirs: temp_dirs
           )
-          # Update labels with correct env_id (optional: docker label update is complex, 
-          # so we store env_id in registry and rely on container_id for lookup)
+          # Labels already contain correct env_id from reserve_id above
+
+          registered = true
 
           # 17. Apply datastore to the active module
           datastore.each do |key, value|
@@ -1143,6 +1168,16 @@ module Msf
         rescue PortAllocator::NoPortsAvailable => e
           print_error("No available ports: #{e.message}")
         rescue => e
+          # Clean up orphaned container if we created one but failed to register it
+          if container_id && !registered
+            begin
+              runtime.remove(container_id)
+              print_status("Cleaned up orphaned container #{container_id[0..11]}")
+            rescue => cleanup_err
+              elog("Failed to cleanup orphaned container: #{cleanup_err.message}")
+            end
+          end
+
           print_error("test_env build failed: #{e.message}")
           elog("test_env build error: #{e.class} - #{e.message}")
           elog(e.backtrace.join("\n"))
@@ -1252,7 +1287,7 @@ module Msf
             if %w[VARIANT PROFILE RPORT].include?(key)
               options[key] = value
             else
-              print_warning("Unknown build option: #{key}. Expected: VARIANT=, PROFILE=")
+              print_warning("Unknown build option: #{key}. Expected: VARIANT=, PROFILE=, RPORT=")
             end
           end
         end
