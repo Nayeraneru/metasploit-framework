@@ -4,7 +4,7 @@ description: Vulnerable WordPress installation for security testing
 variants:
   - name: "latest"
     version: "4.9"
-    image: eystsen/vulnerablewordpress
+    image: docker.io/eystsen/vulnerablewordpress
     default: true
 
 shared:

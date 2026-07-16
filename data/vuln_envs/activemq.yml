@@ -4,7 +4,7 @@ description: Apache ActiveMQ Classic with Jolokia API
 variants:
   - name: "5.18.6"
     version: "5.18.6"
-    image: apache/activemq-classic:5.18.6
+    image: docker.io/apache/activemq-classic:5.18.6
     default: true
 
 shared:
