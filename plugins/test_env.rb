@@ -5,7 +5,8 @@ require 'shellwords'
 require 'tmpdir'
 require 'socket'
 require 'fileutils'
-
+require 'timeout'   
+require 'net/http'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -475,8 +476,8 @@ module Msf
 
       def self.normalize_pref(raw)
         pref = raw.to_s.downcase.strip
+        return 'auto' if pref.empty?  # Unset env var is not an error
         return pref if %w[auto docker podman].include?(pref)
-        warn("Invalid TEST_ENV_RUNTIME: #{raw.inspect}, falling back to auto")
         'auto'
       end
 
@@ -789,6 +790,156 @@ module Msf
 
       def running?
         @environments.values.any?(&:running?)
+      end
+    end
+
+    # =====================================================================
+    # Health Manager
+    # =====================================================================
+    # waits for a container to become ready using a configurable strategy
+    # supports HTTP (status code), TCP (port open), and Command (exec inside container)
+    class HealthManager
+      def initialize(runtime, container_id, health_config, host_port, dispatcher = nil)
+        @runtime = runtime
+        @container_id = container_id
+        @config = health_config || {}
+        @host_port = host_port
+        @dispatcher = dispatcher
+      end
+
+      # block until the health check passes or retries are exhausted
+      # returns true on success. raises on failure so the caller decides cleanup
+      def wait
+        type = @config['type']
+        interval = @config['interval'] || 5
+        timeout = @config['timeout'] || 2
+        retries = @config['retries'] || 12
+
+        unless %w[http tcp command].include?(type)
+          raise "Unknown health check type: #{type.inspect}"
+        end
+
+        print_status("Waiting for health check (#{type.upcase})...")
+
+        retries.times do |i|
+          print_status("  Attempt #{i + 1}/#{retries}...")
+
+          result = false
+          begin
+            # Wrap each individual check in a timeout so a hanging TCP/HTTP
+            # connection doesn't consume the entire retry budget.
+            Timeout.timeout(timeout) do
+              result = case type
+                       when 'http'    then check_http
+                       when 'tcp'     then check_tcp
+                       when 'command' then check_command
+                       end
+            end
+          rescue Timeout::Error
+            result = false
+          rescue => e
+            # Log debug details but don't spam the console on every retry
+            @dispatcher&.elog("Health check attempt #{i + 1} error: #{e.class} - #{e.message}") if @dispatcher&.respond_to?(:elog)
+            result = false
+          end
+
+          if result
+            print_good("Health check passed.")
+            return true
+          end
+
+          sleep(interval)
+        end
+
+        total_seconds = retries * interval
+        raise "Health check timed out after #{total_seconds} seconds"
+      end
+
+      def print_status(msg)
+        @dispatcher&.print_status(msg)
+      end
+
+      def print_good(msg)
+        @dispatcher&.print_good(msg)
+      end
+
+      def print_error(msg)
+        @dispatcher&.print_error(msg)
+      end
+
+      private
+
+      def check_http
+        path = @config['path'] || '/'
+        expected_status = @config['expected_status'] || 200
+
+        uri = URI("http://127.0.0.1:#{@host_port}#{path}")
+
+        # Explicit timeouts prevent hanging connections from consuming the retry budget.
+        # Timeout.timeout is unreliable with Net::HTTP blocking I/O.
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.open_timeout = 2   # Max seconds to establish TCP connection
+        http.read_timeout = 2   # Max seconds to read response
+
+        request = Net::HTTP::Get.new(uri)
+
+        # If credentials are defined in the health_check config, add Basic Auth.
+        # ActiveMQ's Jolokia endpoint requires this.
+        if @config['credentials'] && @config['credentials']['username']
+          request.basic_auth(
+            @config['credentials']['username'],
+            @config['credentials']['password']
+          )
+        end
+
+        response = http.request(request)
+
+        actual_status = response.code.to_i
+        if actual_status == expected_status
+          true
+        else
+          # Diagnostic output: tell the user what actually came back
+          print_status("  Health check returned #{actual_status}, expected #{expected_status}")
+          false
+        end
+      rescue Errno::ECONNRESET
+        # TCP connection accepted but HTTP server not yet initialized.
+        # This is a transient "not ready" signal — retry on next attempt.
+        print_status("  Connection reset on port #{@host_port} (service still initializing)")
+        false
+
+      rescue Errno::ECONNREFUSED
+        print_status("  Connection refused on port #{@host_port}")
+        false
+
+      rescue Net::OpenTimeout
+        print_status("  Connection timeout on port #{@host_port}")
+        false
+      rescue => e
+        print_status("  Health check error: #{e.class} - #{e.message}")
+        false
+      end
+
+      def check_tcp
+        # A successful connection + immediate close means the port is listening
+        TCPSocket.new('127.0.0.1', @host_port).close
+        true
+      rescue => e
+        false
+      end
+
+      def check_command
+        command = @config['command']
+        expected_output = @config['expected_output']
+
+        output, exit_code = @runtime.exec(@container_id, command)
+        return false unless exit_code == 0
+
+        if expected_output
+          output.include?(expected_output)
+        else
+          true
+        end
       end
     end
 
@@ -1129,7 +1280,30 @@ module Msf
 
           print_good("Container started: #{container_id[0..11]}")
 
-          # 14. Build datastore from allocated ports and config defaults
+          # determine the host port that maps to the module's primary service (RPORT)
+          # the health check targets this dynamically allocated host port
+          primary_container_port = port_mapping.key('RPORT')
+          health_host_port = allocated_ports[primary_container_port]
+
+          # 14. wait for health check BEFORE registering the environment
+          # If this fails, the container is cleaned up and the environment is NOT tracked
+          health = config['health_check']
+          begin
+          HealthManager.new(runtime, container_id, health, health_host_port, self).wait
+          rescue => e
+            print_error("Health check failed: #{e.message}")
+
+            # stop and remove the unhealthy container so it doesn't leak
+            begin
+              runtime.stop(container_id) rescue nil
+              runtime.remove(container_id) rescue nil
+            rescue => cleanup_err
+              elog("Failed to cleanup unhealthy container: #{cleanup_err.message}")
+            end
+            return
+          end
+
+          # 15. Build datastore from allocated ports and config defaults
           datastore = { 'RHOSTS' => '127.0.0.1' }
           allocated_ports.each do |container_port, host_port|
             ds_option = port_mapping[container_port]
@@ -1146,7 +1320,7 @@ module Msf
           # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
 
 
-          # 15. Pass the pre-reserved env_id
+          # 16. Pass the pre-reserved env_id
           self.class.registry.register_with_id(
             env_id: env_id,
             container_id: container_id,
@@ -1162,7 +1336,7 @@ module Msf
 
           registered = true
 
-          # 16. Apply datastore to the active module
+          # 17. Apply datastore to the active module
           datastore.each do |key, value|
             mod.datastore[key] = value
           end
@@ -1172,7 +1346,7 @@ module Msf
           # health = config['health_check']
           # HealthManager.new(runtime, container_id, health).wait
 
-          # 17. Display results to user
+          # 18. Display results to user
           print_good("Environment ready.")
           print_status("Environment ID: #{env_id}")
           datastore.each do |key, value|
@@ -1194,6 +1368,9 @@ module Msf
           # Clean up orphaned container if we created one but failed to register it
           if container_id && !registered
             begin
+              # A running container cannot be removed without -f
+              # we stop first to ensure clean removal
+              runtime.stop(container_id) rescue nil
               runtime.remove(container_id)
               print_status("Cleaned up orphaned container #{container_id[0..11]}")
             rescue => cleanup_err

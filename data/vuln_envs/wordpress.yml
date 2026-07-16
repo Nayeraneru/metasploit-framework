@@ -22,7 +22,7 @@ shared:
   health_check:
     type: http
     path: /
-    expected_status: 200
+    expected_status: 302
     interval: 3
     timeout: 2
     retries: 10
