@@ -63143,6 +63143,52 @@
       }
     ]
   },
+  "auxiliary_server/relay/http_to_smb": {
+    "name": "Microsoft Windows HTTP to SMB Relay",
+    "fullname": "auxiliary/server/relay/http_to_smb",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "auxiliary",
+    "author": [
+      "jheysel-r7"
+    ],
+    "description": "This module supports running an HTTP server which validates credentials, and\n          then attempts to execute a relay attack against an SMB server on the\n          configured RHOSTS hosts.\n\n          If the relay succeeds, an SMB session to the target will be created. This can\n          be used by any modules that support SMB sessions.\n\n          Supports SMBv2, SMBv3, and captures NTLMv1 as well as NTLMv2 hashes.",
+    "references": [],
+    "platform": "",
+    "arch": "",
+    "rport": 445,
+    "autofilter_ports": [],
+    "autofilter_services": [],
+    "targets": null,
+    "mod_time": "2026-06-29 13:55:36 +0000",
+    "path": "/modules/auxiliary/server/relay/http_to_smb.rb",
+    "is_install_path": true,
+    "ref_name": "server/relay/http_to_smb",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "Reliability": [
+        "repeatable-session"
+      ],
+      "SideEffects": [
+        "ioc-in-logs",
+        "account-lockouts"
+      ]
+    },
+    "session_types": false,
+    "needs_cleanup": false,
+    "actions": [
+      {
+        "name": "CREATE_SMB_SESSION",
+        "description": "Create an SMB session"
+      }
+    ]
+  },
   "auxiliary_server/relay/relay_get_naa_credentials": {
     "name": "SMB to HTTP relay version of Get NAA Creds",
     "fullname": "auxiliary/server/relay/relay_get_naa_credentials",
@@ -66374,7 +66420,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2025-04-14 00:10:31 +0000",
+    "mod_time": "2026-07-11 13:26:13 +0000",
     "path": "/modules/encoders/x64/xor_dynamic.rb",
     "is_install_path": true,
     "ref_name": "x64/xor_dynamic",
@@ -67077,7 +67123,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2025-04-14 00:10:31 +0000",
+    "mod_time": "2026-07-11 13:26:13 +0000",
     "path": "/modules/encoders/x86/xor_dynamic.rb",
     "is_install_path": true,
     "ref_name": "x86/xor_dynamic",
@@ -211202,7 +211248,7 @@
       "MOF upload",
       "Command"
     ],
-    "mod_time": "2026-02-03 20:58:31 +0000",
+    "mod_time": "2026-06-24 14:29:47 +0000",
     "path": "/modules/exploits/windows/smb/psexec.rb",
     "is_install_path": true,
     "ref_name": "windows/smb/psexec",
@@ -292107,7 +292153,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2026-06-08 14:52:44 +0000",
+    "mod_time": "2026-07-15 11:03:05 +0000",
     "path": "/modules/payloads/singles/linux/multi/meterpreter_reverse_tcp.rb",
     "is_install_path": true,
     "ref_name": "linux/multi/meterpreter_reverse_tcp",
