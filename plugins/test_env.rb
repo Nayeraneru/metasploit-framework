@@ -539,6 +539,91 @@ module Msf
     end
 
     # =====================================================================
+    # Built Environment (Immutable Value Object)
+    # =====================================================================
+    class BuiltEnvironment
+      attr_reader :local_id, :container_id, :module_fullname, :env_version,
+                  :runtime, :image_ref, :status, :exploit_command,
+                  :datastore, :created_at, :started_at, :stopped_at, :removed_at
+
+      def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
+                     runtime:, image_ref:, exploit_command:, datastore: {},
+                     created_at: Time.now, started_at: Time.now)
+        @local_id        = local_id
+        @container_id    = container_id
+        @module_fullname = module_fullname
+        @env_version     = env_version
+        @runtime         = runtime
+        @image_ref       = image_ref
+        @status          = :running
+        @exploit_command = exploit_command
+        @datastore       = datastore.dup.freeze  # Prevent external mutation
+        @created_at      = created_at
+        @started_at      = started_at
+        @stopped_at      = nil
+        @removed_at      = nil
+      end
+
+      # Convenience accessors — derived from datastore, not stored redundantly
+      def rhost
+        datastore['RHOSTS'] || datastore['RHOST']
+      end
+
+      def rport
+        datastore['RPORT']
+      end
+
+      def running?
+        status == :running
+      end
+
+      def stopped?
+        status == :stopped
+      end
+
+      def removed?
+        status == :removed
+      end
+
+      # State transitions with timestamp tracking
+      def mark_running
+        @status = :running
+        @started_at = Time.now
+      end
+
+      def mark_stopped
+        @status = :stopped
+        @stopped_at = Time.now
+      end
+
+      def mark_removed
+        @status = :removed
+        @removed_at = Time.now
+      end
+
+      # Convert to hash for serialization (DB Phase 2) or table output
+      def to_h
+        {
+          local_id: local_id,
+          container_id: container_id,
+          module_fullname: module_fullname,
+          env_version: env_version,
+          runtime: runtime,
+          image_ref: image_ref,
+          status: status,
+          exploit_command: exploit_command,
+          datastore: datastore,
+          rhost: rhost,
+          rport: rport,
+          created_at: created_at,
+          started_at: started_at,
+          stopped_at: stopped_at,
+          removed_at: removed_at
+        }
+      end
+    end
+
+    # =====================================================================
     # Built Environment Registry (Phase 1: In-Memory Only)
     # =====================================================================
     class BuiltEnvironmentRegistry
@@ -546,34 +631,29 @@ module Msf
 
       def initialize(framework)
         @framework = framework
-        @environments = {}  # local_id => Hash
+        @environments = {}  # local_id => BuiltEnvironment
         @next_id = 1
-        @mutex = Mutex.new   # Thread-safe for concurrent access
+        @mutex = Mutex.new
       end
 
-      def register(container_id:, module_fullname:, rhost:, rport:,
-                   version: nil, runtime: 'docker', image_ref:,
-                   exploit_command:, datastore: {})
+      def register(container_id:, module_fullname:, env_version: nil,
+                   runtime:, image_ref:, exploit_command:, datastore: {})
         @mutex.synchronize do
           id = @next_id
           @next_id += 1
 
-          @environments[id] = {
+          env = BuiltEnvironment.new(
             local_id: id,
             container_id: container_id,
             module_fullname: module_fullname,
-            env_version: version,
-            rhost: rhost,
-            rport: rport,
+            env_version: env_version,
             runtime: runtime,
             image_ref: image_ref,
-            status: 'running',
             exploit_command: exploit_command,
-            datastore: datastore,
-            created_at: Time.now,
-            started_at: Time.now
-          }
+            datastore: datastore
+          )
 
+          @environments[id] = env
           id
         end
       end
@@ -583,53 +663,54 @@ module Msf
       end
 
       def list
-        @environments.values.sort_by { |e| e[:local_id] }
+        @environments.values.sort_by(&:local_id)
       end
 
       def update_status(id, status)
         @mutex.synchronize do
-          return unless @environments[id]
-          @environments[id][:status] = status
-          @environments[id][:updated_at] = Time.now
-          @environments[id][:stopped_at] = Time.now if status == 'stopped'
-          @environments[id][:started_at] = Time.now if status == 'running'
+          env = @environments[id]
+          return unless env
+
+          case status.to_sym
+          when :running then env.mark_running
+          when :stopped then env.mark_stopped
+          when :removed then env.mark_removed
+          end
         end
       end
 
       def remove(id)
         @mutex.synchronize do
-          return unless @environments[id]
-          @environments[id][:status] = 'removed'
-          @environments[id][:removed_at] = Time.now
-          @environments[id].delete(:local_id)
+          env = @environments[id]
+          return unless env
+
+          env.mark_removed
+          @environments.delete(id)
         end
       end
 
       def remove_all
         @mutex.synchronize do
-          @environments.each_value do |env|
-            env[:status] = 'removed'
-            env[:removed_at] = Time.now
-          end
+          @environments.each_value(&:mark_removed)
           @environments.clear
           @next_id = 1
         end
       end
 
       def find_by_container(container_id)
-        @environments.values.find { |e| e[:container_id] == container_id }
+        @environments.values.find { |e| e.container_id == container_id }
       end
 
       def find_by_module(module_fullname)
-        @environments.values.select { |e| e[:module_fullname] == module_fullname }
+        @environments.values.select { |e| e.module_fullname == module_fullname }
       end
 
       def used_ports
-        @environments.values.map { |e| e[:rport] }
+        @environments.values.map(&:rport).compact
       end
 
       def running?
-        @environments.values.any? { |e| e[:status] == 'running' }
+        @environments.values.any?(&:running?)
       end
     end
 
@@ -949,8 +1030,6 @@ module Msf
           env_id = self.class.registry.register(
             container_id: container_id,
             module_fullname: mod.fullname,
-            rhost: '127.0.0.1',
-            rport: allocated_ports.values.first,
             version: variant,
             runtime: runtime.name,
             image_ref: config['image'],
