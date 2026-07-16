@@ -1005,6 +1005,16 @@ module Msf
           loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
           config = loader.resolve(definition_name, variant, profile, env.overrides)
 
+          # Validate: every port in module's port_mapping must exist in the environment's exposed ports
+          resolved_ports = config.fetch('ports', {}).values.map(&:to_i)
+          port_mapping.keys.each do |container_port|
+            port_int = container_port.to_i
+            unless resolved_ports.include?(port_int)
+              available = resolved_ports.join(', ')
+              raise "Port mapping mismatch: module maps port #{port_int} but environment '#{definition_name}' (variant '#{variant}', profile '#{profile}') only exposes ports: #{available}"
+            end
+          end
+
           print_status("Resolving environment for #{mod.fullname}...")
           print_status("Definition: #{definition_name} | Variant: #{variant} | Profile: #{profile}")
           print_status("Image: #{config['image']}")
