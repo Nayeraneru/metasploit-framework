@@ -4,6 +4,7 @@ require 'open3'
 require 'shellwords'
 require 'tmpdir'
 require 'socket'
+require 'fileutils'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -160,7 +161,8 @@ module Msf
         end
       end
 
-      VALID_IMAGE_NAME = /\A[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::[a-zA-Z0-9._-]+)?\z/ unless defined?(VALID_IMAGE_NAME)
+      # reject only dangerous shell characters
+      VALID_IMAGE_NAME = /\A[^;&|`$(){}[\]\s\\]+\z/ unless defined?(VALID_IMAGE_NAME)
 
       private
 
@@ -325,10 +327,10 @@ module Msf
           return [true, 'Podman running in rootful mode.']
         end
 
-        # Rootless: check for pasta (preferred) or slirp4netns (fallback)
-        if Open3.capture3('which', 'pasta')[2].success?
+        # Rootless: check for pasta (preferred) or slirp4netns (fallback) using Ruby's PATH search
+        if executable_in_path?('pasta')
           [true, 'Rootless Podman verified — pasta networking available.']
-        elsif Open3.capture3('which', 'slirp4netns')[2].success?
+        elsif executable_in_path?('slirp4netns')
           [true, 'Rootless Podman verified — slirp4netns networking available.']
         else
           [false, 'Rootless Podman detected but no networking backend (pasta or slirp4netns) found. ' \
@@ -447,6 +449,13 @@ module Msf
         return image if image.include?('/')
         "docker.io/library/#{image}"
       end
+
+      def executable_in_path?(cmd)
+        return false if ENV['PATH'].nil?
+        ENV['PATH'].split(File::PATH_SEPARATOR).any? do |dir|
+          File.executable?(File.join(dir, cmd))
+        end
+      end
     end
 
     # ============================================================
@@ -544,11 +553,11 @@ module Msf
     class BuiltEnvironment
       attr_reader :local_id, :container_id, :module_fullname, :env_version,
                   :runtime, :image_ref, :status, :exploit_command,
-                  :datastore, :created_at, :started_at, :stopped_at, :removed_at
+                  :datastore, :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
 
       def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
                      runtime:, image_ref:, exploit_command:, datastore: {},
-                     created_at: Time.now, started_at: Time.now)
+                     created_at: Time.now, started_at: Time.now, temp_dirs: [])
         @local_id        = local_id
         @container_id    = container_id
         @module_fullname = module_fullname
@@ -562,6 +571,7 @@ module Msf
         @started_at      = started_at
         @stopped_at      = nil
         @removed_at      = nil
+        @temp_dirs = temp_dirs.dup.freeze
       end
 
       # Convenience accessors — derived from datastore, not stored redundantly
@@ -636,8 +646,16 @@ module Msf
         @mutex = Mutex.new
       end
 
+      def reserve_id
+        @mutex.synchronize do
+          id = @next_id
+          @next_id += 1
+          id
+        end
+      end
+
       def register(container_id:, module_fullname:, env_version: nil,
-                   runtime:, image_ref:, exploit_command:, datastore: {})
+                   runtime:, image_ref:, exploit_command:, datastore: {}, temp_dirs: [])
         @mutex.synchronize do
           id = @next_id
           @next_id += 1
@@ -651,12 +669,32 @@ module Msf
             image_ref: image_ref,
             exploit_command: exploit_command,
             datastore: datastore
+            temp_dirs: temp_dirs
           )
 
           @environments[id] = env
           id
         end
       end
+
+      def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
+                           runtime:, image_ref:, exploit_command:, datastore: {})
+        @mutex.synchronize do
+          env = BuiltEnvironment.new(
+            local_id: env_id,
+            container_id: container_id,
+            module_fullname: module_fullname,
+            env_version: env_version,
+            runtime: runtime,
+            image_ref: image_ref,
+            exploit_command: exploit_command,
+            datastore: datastore
+          )
+
+          @environments[env_id] = env
+          env_id
+        end
+      end 
 
       def get(id)
         @environments[id]
@@ -683,6 +721,11 @@ module Msf
         @mutex.synchronize do
           env = @environments[id]
           return unless env
+
+          # Clean up temp directories
+          env.temp_dirs.each do |dir|
+            FileUtils.rm_rf(dir) if Dir.exist?(dir)
+          end
 
           env.mark_removed
           @environments.delete(id)
@@ -961,6 +1004,8 @@ module Msf
 
             if user_rport && host_port != user_rport
               print_status("Requested port #{user_rport} unavailable. Using dynamically allocated port #{host_port}.")
+            elsif user_rport && port_mapping.length > 1
+              print_status("Note: RPORT override applies to first port mapping only. Additional ports use dynamic allocation.")
             end
 
             allocated_ports[container_port] = host_port
@@ -969,10 +1014,14 @@ module Msf
 
           # 10. Build container labels for cross-session identification
           instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
+          # reserve the ID first, before starting the container
+          env_id = self.class.registry.reserve_id
+
+          # now build labels with the GUARANTEED ID
           labels = runtime.build_labels(
             instance_id: instance_id,
             module_fullname: mod.fullname,
-            env_id: self.class.registry.send(:instance_variable_get, :@next_id), # Will be replaced after register
+            env_id: env_id,
             version: variant,
             ports: allocated_ports
           )
@@ -986,11 +1035,15 @@ module Msf
 
           # 12. Prepare volumes from config
           volumes = {}
+          temp_dirs = []
+
           if config['volumes']
             config['volumes'].each do |name, vol_cfg|
-              # For now, use anonymous volumes or temp directories
-              # In production, you'd manage volume lifecycle
-              host_path = vol_cfg['host_path'] || Dir.mktmpdir("test_env_#{name}_")
+              host_path = vol_cfg['host_path']
+              unless host_path  # <-- CHANGED: split the || into two lines
+                host_path = Dir.mktmpdir("test_env_#{name}_")
+                temp_dirs << host_path  # <-- ADD THIS LINE
+              end
               volumes[host_path] = vol_cfg['container_path']
             end
           end
@@ -1005,6 +1058,26 @@ module Msf
             volumes: volumes,
             name: container_name
           )
+
+          # verify container actually started
+          container_info = runtime.inspect(container_id)
+          unless container_info
+            print_error("Container started but inspect failed immediately.")
+            return
+          end
+
+          # check if running (Docker/Podman both use State.Status)
+          status = container_info.dig('State', 'Status') || container_info.dig('State', 'Running')
+          if status != 'running' && status != true
+            # Try to get the error reason
+            error_msg = container_info.dig('State', 'Error') || 'unknown'
+            print_error("Container failed to start. Status: #{status.inspect}, Error: #{error_msg}")
+
+            # clean up the dead container
+            runtime.remove(container_id)
+            return
+          end
+
           print_good("Container started: #{container_id[0..11]}")
 
           # 14. Build datastore from allocated ports and config defaults
@@ -1021,22 +1094,24 @@ module Msf
             end
           end
 
+          # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
+
           # 15. Build exploit command string
           exploit_cmds = datastore.map { |k, v| "set #{k} #{v}" }
           exploit_command = exploit_cmds.join('; ') + '; exploit'
 
-          # 16. Register in the built environment registry
-          # Rebuild labels with correct env_id after registration
-          env_id = self.class.registry.register(
+          # 16. Pass the pre-reserved env_id
+          self.class.registry.register_with_id(
+            env_id: env_id,
             container_id: container_id,
             module_fullname: mod.fullname,
-            version: variant,
+            env_version: variant,
             runtime: runtime.name,
             image_ref: config['image'],
             exploit_command: exploit_command,
             datastore: datastore
+            temp_dirs: temp_dirs
           )
-
           # Update labels with correct env_id (optional: docker label update is complex, 
           # so we store env_id in registry and rely on container_id for lookup)
 
@@ -1044,6 +1119,11 @@ module Msf
           datastore.each do |key, value|
             mod.datastore[key] = value
           end
+
+          # TODO(Week 5): HealthManager.wait_for_ready(runtime, container_id, config['health_check'])
+          # Wait for health check before reporting ready
+          # health = config['health_check']
+          # HealthManager.new(runtime, container_id, health).wait
 
           # 18. Display results to user
           print_good("Environment ready.")
@@ -1093,6 +1173,13 @@ module Msf
             ok, msg = runtime.verify_rootless
             ok ? print_good(msg) : print_warning(msg)
           end
+
+          # count framework-managed containers
+          containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
+          running = containers.count { |c| c['State'] == 'running' }
+          total = containers.length
+
+          print_status("Managed containers: #{total} total, #{running} running")
         else
           print_error("No runtime configured.")
         end
