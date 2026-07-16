@@ -162,8 +162,8 @@ module Msf
       end
 
       # reject only dangerous shell characters
-      VALID_IMAGE_NAME = /\A[^;&|`$(){}[\]\s\\]+\z/ unless defined?(VALID_IMAGE_NAME)
-
+      VALID_IMAGE_NAME = /\A[^\s;|&`$(){}]+\z/ unless defined?(VALID_IMAGE_NAME)
+      
       private
 
       def validate_image_name!(image)
