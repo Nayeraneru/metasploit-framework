@@ -6,7 +6,7 @@ This document specifies the intended user interaction with `test_env`. Every tra
 
 ## Scenario 1: Build an Environment for the Active Module
 
-**Precondition:** The user has selected a module that defines a `VulnEnv` key in its metadata.
+**Precondition:** The user has selected a module that defines a `VulnerableEnvironment` key in its metadata.
 
 **Input:**
 ```

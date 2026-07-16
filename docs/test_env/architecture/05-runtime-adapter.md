@@ -134,6 +134,7 @@ class BaseRuntime
   def list(filters: {}); raise NotImplementedError; end
 end
 ```
+> **Note:** `BaseRuntime#exec` executes commands *inside* the container (for health checks). This is distinct from the `test_env exec` dispatcher command which runs the exploit module. No collision occurs in practice due to Ruby namespacing.
 
 ## Container Label Schema
 
