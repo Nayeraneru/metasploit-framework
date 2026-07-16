@@ -6,6 +6,7 @@ require 'tmpdir'
 require 'socket'
 require 'fileutils'
 
+
 module Msf
   class Plugin::TestEnv < Msf::Plugin
     # =====================================================================
@@ -475,7 +476,7 @@ module Msf
       def self.normalize_pref(raw)
         pref = raw.to_s.downcase.strip
         return pref if %w[auto docker podman].include?(pref)
-        elog("Invalid TEST_ENV_RUNTIME: #{raw.inspect}, falling back to auto")
+        warn("Invalid TEST_ENV_RUNTIME: #{raw.inspect}, falling back to auto")
         'auto'
       end
 
@@ -552,11 +553,11 @@ module Msf
     # =====================================================================
     class BuiltEnvironment
       attr_reader :local_id, :container_id, :module_fullname, :env_version,
-                  :runtime, :image_ref, :status, :datastore, :created_at, 
-                  :started_at, :stopped_at, :removed_at, :temp_dirs
+                  :runtime, :image_ref, :status,:datastore, :allocated_ports, 
+                  :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
 
       def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
-                     runtime:, image_ref:, datastore: {},
+                     runtime:, image_ref:, datastore: {}, allocated_ports: {},
                      created_at: Time.now, started_at: Time.now, temp_dirs: [])
         @local_id        = local_id
         @container_id    = container_id
@@ -571,6 +572,7 @@ module Msf
         @stopped_at      = nil
         @removed_at      = nil
         @temp_dirs = temp_dirs.dup.freeze
+        @allocated_ports = allocated_ports.dup.freeze
       end
 
       # Convenience accessors — derived from datastore, not stored redundantly
@@ -580,6 +582,11 @@ module Msf
 
       def rport
         datastore['RPORT']
+      end
+
+      # All host ports allocated for this environment (for collision detection)
+      def all_host_ports
+        allocated_ports.values
       end
 
       def running?
@@ -627,6 +634,8 @@ module Msf
           status: status,
           exploit_command: exploit_command,
           datastore: datastore,
+          allocated_ports: allocated_ports,
+          all_host_ports: all_host_ports,
           rhost: rhost,
           rport: rport,
           created_at: created_at,
@@ -660,7 +669,7 @@ module Msf
       end
 
       def register(container_id:, module_fullname:, env_version: nil,
-                   runtime:, image_ref:, datastore: {}, temp_dirs: [])
+                   runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
           id = @next_id
           @next_id += 1
@@ -673,6 +682,7 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
 
@@ -682,7 +692,7 @@ module Msf
       end
 
       def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
-                           runtime:, image_ref:, datastore: {}, temp_dirs: [])
+                           runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
           env = BuiltEnvironment.new(
             local_id: env_id,
@@ -692,6 +702,7 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
 
@@ -740,6 +751,8 @@ module Msf
       end
 
       def remove_all
+        # this only clears registry records. It does NOT stop containers
+        # the dispatcher must call runtime.stop / runtime.remove on each container first
         # collect temp directories and mark removed under mutex
         # but do the actual filesystem cleanup AFTER releasing the mutex
         envs_to_clean = []
@@ -771,7 +784,7 @@ module Msf
       end
 
       def used_ports
-        @environments.values.map(&:rport).compact
+        @environments.values.flat_map(&:all_host_ports).compact
       end
 
       def running?
@@ -1085,7 +1098,7 @@ module Msf
 
           # 13. Launch the container
           print_status("Starting container...")
-          container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_i}"
+          container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_f.to_s.delete('.')}"  
           container_id = runtime.run(
             image: config['image'],
             ports: run_ports,
@@ -1142,6 +1155,7 @@ module Msf
             runtime: runtime.name,
             image_ref: config['image'],
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
           # Labels already contain correct env_id from reserve_id above
