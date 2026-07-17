@@ -505,14 +505,25 @@ module Msf
     # =====================================================================
     # Port Allocator
     # =====================================================================
+    # Allocates free host ports for container bindings.
+    # Checks both the current registry AND actively bound Docker/Podman ports
+    # to avoid collisions with orphaned containers from previous sessions.
     class PortAllocator
       EPHEMERAL_START = 49152 unless defined?(EPHEMERAL_START)
       EPHEMERAL_END   = 65535 unless defined?(EPHEMERAL_END)
 
       class NoPortsAvailable < RuntimeError; end
 
-      def initialize(used_ports = [])
+      # runtime: the runtime adapter (DockerRuntime or PodmanRuntime) used to
+      # query already-bound ports from previous sessions.
+      def initialize(runtime = nil, used_ports = [])
+        @runtime = runtime
         @used_ports = Set.new(used_ports)
+
+        # Seed the set with ports already bound by Docker/Podman containers.
+        # This prevents collisions with orphaned containers from previous
+        # msfconsole sessions whose registry state is lost.
+        scan_runtime_ports if @runtime
       end
 
       def allocate(preferred = nil)
@@ -538,6 +549,30 @@ module Msf
 
       private
 
+      # Query the container runtime for ports already bound on the host.
+      # This catches orphaned containers from previous sessions.
+      def scan_runtime_ports
+        return unless @runtime
+
+        begin
+          containers = @runtime.list
+          containers.each do |c|
+            next unless c['Ports'].is_a?(String)
+
+            # Docker ps output format: "127.0.0.1:49153->8161/tcp, 127.0.0.1:49154->80/tcp"
+            # Extract host ports from the binding string.
+            c['Ports'].scan(/:(\d+)->\d+\//).each do |match|
+              port = match[0].to_i
+              @used_ports.add(port) if port.between?(EPHEMERAL_START, EPHEMERAL_END)
+            end
+          end
+        rescue => e
+          # If the runtime query fails, fall back to TCPServer-only checking
+          # This is a graceful degradation, not a fatal error
+          elog("PortAllocator: failed to scan runtime ports: #{e.message}")
+        end
+      end
+
       def available?(port)
         return false if @used_ports.include?(port)
 
@@ -548,7 +583,6 @@ module Msf
         false
       end
     end
-
     # =====================================================================
     # Built Environment (Immutable Value Object)
     # =====================================================================
@@ -1194,7 +1228,10 @@ module Msf
           print_good("Image pulled successfully.")
 
           # 9. Allocate ports using PortAllocator
-          allocator = PortAllocator.new(self.class.registry.used_ports)
+          # Pass the runtime so PortAllocator can scan Docker/Podman for
+          # ports already bound by orphaned containers from previous sessions.
+          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
+          #allocator = PortAllocator.new(self.class.registry.used_ports)
           allocated_ports = {}  # {container_port => host_port}
           user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
 
@@ -1341,10 +1378,6 @@ module Msf
             mod.datastore[key] = value
           end
 
-          # TODO(Week 5): HealthManager.wait_for_ready(runtime, container_id, config['health_check'])
-          # Wait for health check before reporting ready
-          # health = config['health_check']
-          # HealthManager.new(runtime, container_id, health).wait
 
           # 18. Display results to user
           print_good("Environment ready.")
