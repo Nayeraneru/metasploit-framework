@@ -1230,22 +1230,21 @@ module Msf
           # 9. Allocate ports using PortAllocator
           # Pass the runtime so PortAllocator can scan Docker/Podman for
           # ports already bound by orphaned containers from previous sessions.
-          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
-          #allocator = PortAllocator.new(self.class.registry.used_ports)
-          allocated_ports = {}  # {container_port => host_port}
           user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
+          # Resolve which container port the user actually wants to override.
+          # this ensures RPORT=8081 always targets the port mapped to the
+          # 'RPORT' datastore key, regardless of Ruby hash insertion order.
+          target_container_port = user_rport ? port_mapping.key('RPORT') : nil
 
           port_mapping.each do |container_port, ds_option|
-            host_port = allocator.allocate(user_rport)
+            preferred = (container_port == target_container_port) ? user_rport : nil
+            host_port = allocator.allocate(preferred)
 
-            if user_rport && host_port != user_rport
-              print_status("Requested port #{user_rport} unavailable. Using dynamically allocated port #{host_port}.")
-            elsif user_rport && port_mapping.length > 1
-              print_status("Note: RPORT override applies to first port mapping only. Additional ports use dynamic allocation.")
+            if preferred && host_port != preferred
+              print_status("Requested port #{preferred} unavailable. Using dynamically allocated port #{host_port}.")
             end
 
             allocated_ports[container_port] = host_port
-            user_rport = nil  # Only use preferred port for first mapping
           end
 
           # 10. Build container labels for cross-session identification
@@ -1317,10 +1316,12 @@ module Msf
 
           print_good("Container started: #{container_id[0..11]}")
 
-          # determine the host port that maps to the module's primary service (RPORT)
-          # the health check targets this dynamically allocated host port
+          # Determine the host port for health checks.
+          # If the module maps a port to 'RPORT', use that. Otherwise fall back
+          # to the first allocated port so health checks don't crash on modules
+          # that use a different datastore key (e.g., auxiliary scanners).
           primary_container_port = port_mapping.key('RPORT')
-          health_host_port = allocated_ports[primary_container_port]
+          health_host_port = allocated_ports[primary_container_port] || allocated_ports.values.first
 
           # 14. wait for health check BEFORE registering the environment
           # If this fails, the container is cleaned up and the environment is NOT tracked
