@@ -8,6 +8,38 @@ require 'fileutils'
 require 'timeout'   
 require 'net/http'
 
+# =====================================================================
+# Database Migration (Embedded in Plugin)
+# =====================================================================
+class CreateVulnEnvironments < ActiveRecord::Migration[7.0]
+  def change
+    create_table :vuln_environments, id: :serial do |t|
+      t.string  :container_id,    null: false
+      t.string  :image_ref,       null: false
+      t.string  :module_fullname, null: false
+      t.string  :env_version
+      t.string  :profile
+      t.string  :rhost,           default: '127.0.0.1'
+      t.integer :rport,           null: false
+      t.text    :datastore        # JSON-serialized hash
+      t.string  :runtime,         default: 'docker', null: false
+      t.string  :msf_instance_id  # For multi-session isolation
+      t.string  :status,          null: false, default: 'running'
+      t.text    :exploit_command
+      t.timestamps
+      t.datetime :started_at
+      t.datetime :stopped_at
+      t.datetime :removed_at
+    end
+
+    add_index :vuln_environments, :module_fullname
+    add_index :vuln_environments, :status
+    add_index :vuln_environments, :container_id, unique: true
+    add_index :vuln_environments, :msf_instance_id
+    add_index :vuln_environments, [:status, :module_fullname]
+  end
+end
+
 module Msf
   class Plugin::TestEnv < Msf::Plugin
     # =====================================================================
@@ -1530,6 +1562,24 @@ module Msf
     end
 
     # =====================================================================
+    # Database Schema Management
+    # =====================================================================
+    def ensure_database_schema
+      return unless framework.db.active
+
+      if framework.db.connection.table_exists?(:vuln_environments)
+        return  # Already migrated — idempotent
+      end
+
+      CreateVulnEnvironments.migrate(:up)
+      print_status("Created vuln_environments table for test_env persistence")
+
+    rescue => e
+      print_warning("Could not create test_env database table: #{e.message}")
+      print_warning("Falling back to YAML file persistence.")
+    end
+
+    # =====================================================================
     # Plugin Lifecycle
     # =====================================================================
     def initialize(framework, opts)
@@ -1537,6 +1587,8 @@ module Msf
       @runtime = RuntimeAdapter.detect
       @registry = BuiltEnvironmentRegistry.new(framework)
 
+      ensure_database_schema
+      
       ConsoleCommandDispatcher.runtime = @runtime
       ConsoleCommandDispatcher.registry = @registry
 
