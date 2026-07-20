@@ -654,7 +654,8 @@ module Msf
 
       # construct exploit command dynamically from current datastore
       def exploit_command
-        datastore.map { |k, v| "set #{k} #{v}" }.join('; ') + '; exploit'
+        opts = datastore.map { |k, v| "#{k}=#{v}" }.join(' ')
+        "exploit #{opts}"
       end
 
       # Convert to hash for serialization (DB Phase 2) or table output
