@@ -1230,6 +1230,8 @@ module Msf
           # 9. Allocate ports using PortAllocator
           # Pass the runtime so PortAllocator can scan Docker/Podman for
           # ports already bound by orphaned containers from previous sessions.
+          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
+          allocated_ports = {}  # {container_port => host_port}
           user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
           # Resolve which container port the user actually wants to override.
           # this ensures RPORT=8081 always targets the port mapped to the
