@@ -1,5 +1,6 @@
 require 'set'
 require 'json'
+require 'yaml'
 require 'open3'
 require 'shellwords'
 require 'tmpdir'
@@ -11,7 +12,17 @@ require 'net/http'
 # =====================================================================
 # Database Migration (Embedded in Plugin)
 # =====================================================================
-class CreateVulnEnvironments < ActiveRecord::Migration[7.0]
+VULNENV_MIGRATION_BASE = begin
+  if ActiveRecord::Migration.respond_to?(:current_version)
+    ActiveRecord::Migration[ActiveRecord::Migration.current_version]
+  else
+    ActiveRecord::Migration
+  end
+rescue
+  ActiveRecord::Migration
+end
+
+class CreateVulnEnvironments < VULNENV_MIGRATION_BASE
   def change
     create_table :vuln_environments, id: :serial do |t|
       t.string  :container_id,    null: false
@@ -37,6 +48,33 @@ class CreateVulnEnvironments < ActiveRecord::Migration[7.0]
     add_index :vuln_environments, :container_id, unique: true
     add_index :vuln_environments, :msf_instance_id
     add_index :vuln_environments, [:status, :module_fullname]
+  end
+end
+
+# =====================================================================
+# ActiveRecord Model for Persistent Storage
+# =====================================================================
+# Only define if ActiveRecord is loaded. If the user runs msfconsole
+# without a database, ActiveRecord may not be available, and we fall
+# back to YAML persistence silently.
+# =====================================================================
+if defined?(ActiveRecord)
+  class VulnEnvironment < ActiveRecord::Base
+    self.table_name = 'vuln_environments'
+    begin
+      serialize :datastore, coder: JSON
+    rescue ArgumentError
+      serialize :datastore, JSON
+    end
+
+    scope :active,  -> { where(status: ['running', 'stopped']) }
+    scope :running, -> { where(status: 'running') }
+    scope :by_instance, ->(id) { where(msf_instance_id: id) }
+
+    validates :container_id,    presence: true, uniqueness: true
+    validates :module_fullname, presence: true
+    validates :rport,           presence: true, numericality: { only_integer: true }
+    validates :status,          inclusion: { in: %w[running stopped removed orphaned error] }
   end
 end
 
@@ -715,7 +753,7 @@ module Msf
     end
 
     # =====================================================================
-    # Built Environment Registry (Phase 1: In-Memory Only)
+    # Built Environment Registry
     # =====================================================================
     class BuiltEnvironmentRegistry
       attr_reader :environments, :framework
@@ -725,6 +763,56 @@ module Msf
         @environments = {}  # local_id => BuiltEnvironment
         @next_id = 1
         @mutex = Mutex.new
+        @instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
+        @db_available = framework.db.active && defined?(VulnEnvironment)
+      end
+
+      
+      # Database persistence hooks
+      def persist(env)
+        return unless @db_available
+
+        # Inject allocated_ports into the serialized hash so we can
+        # reconstruct them on startup. the datastore is frozen, so we
+        # dup before serializing.
+        db_datastore = env.datastore.dup
+        db_datastore['__allocated_ports'] = env.allocated_ports.to_h
+
+        VulnEnvironment.create!(
+          id: env.local_id,  # reuse the same ID for consistency
+          container_id: env.container_id,
+          image_ref: env.image_ref,
+          module_fullname: env.module_fullname,
+          env_version: env.env_version,
+          profile: db_datastore['PROFILE'],
+          rhost: env.rhost,
+          rport: env.rport,
+          datastore: db_datastore,
+          runtime: env.runtime,
+          msf_instance_id: @instance_id,
+          status: env.status.to_s,
+          exploit_command: env.exploit_command,
+          created_at: env.created_at,
+          started_at: env.started_at
+        )
+      rescue => e
+        elog("Failed to persist environment to database: #{e.message}")
+      end
+
+      def sync_status_to_db(env)
+        return unless @db_available
+
+        record = VulnEnvironment.find_by(container_id: env.container_id)
+        return unless record
+
+        record.update!(
+          status: env.status.to_s,
+          started_at: env.started_at,
+          stopped_at: env.stopped_at,
+          removed_at: env.removed_at
+        )
+      rescue => e
+        elog("Failed to sync environment status to database: #{e.message}")
       end
 
       def reserve_id
@@ -774,6 +862,7 @@ module Msf
           )
 
           @environments[env_id] = env
+          persist(env)
           env_id
         end
       end 
@@ -787,6 +876,8 @@ module Msf
       end
 
       def update_status(id, status)
+        env_to_sync = nil
+
         @mutex.synchronize do
           env = @environments[id]
           return unless env
@@ -796,22 +887,32 @@ module Msf
           when :stopped then env.mark_stopped
           when :removed then env.mark_removed
           end
+
+          env_to_sync = env
         end
+
+        # Sync to DB outside the mutex as DB ops are slow and should not
+        # block other threads from using the registry.
+        sync_status_to_db(env_to_sync) if env_to_sync
       end
 
       def remove(id)
         dirs_to_clean = []
-        
+        env_to_sync = nil
+
         @mutex.synchronize do
           env = @environments[id]
           return unless env
 
           dirs_to_clean = env.temp_dirs.dup
           env.mark_removed
+          env_to_sync = env
           @environments.delete(id)
         end
-        
-        # cleanup outside mutex
+
+        # sync to DB outside mutex
+        sync_status_to_db(env_to_sync) if env_to_sync
+
         dirs_to_clean.each do |dir|
           FileUtils.rm_rf(dir) if Dir.exist?(dir)
         end
@@ -822,23 +923,48 @@ module Msf
         # the dispatcher must call runtime.stop / runtime.remove on each container first
         # collect temp directories and mark removed under mutex
         # but do the actual filesystem cleanup AFTER releasing the mutex
+        envs_to_sync = []
         envs_to_clean = []
         
         @mutex.synchronize do
           @environments.each_value do |env|
-            envs_to_clean << env.temp_dirs
             env.mark_removed
+            envs_to_sync << env
+            envs_to_clean << env.temp_dirs
           end
           @environments.clear
           @next_id = 1
         end
-        
+
+        # Sync all statuses outside mutex
+        if @db_available
+          envs_to_sync.each { |env| sync_status_to_db(env) }
+        end
+     
         # slow filesystem operations happen OUTSIDE the mutex
         # other threads can now use the registry freely
         envs_to_clean.each do |dirs|
           dirs.each do |dir|
             FileUtils.rm_rf(dir) if Dir.exist?(dir)
           end
+        end
+      end
+      
+      # State Reconstruction (Startup Recovery)
+      def reconstruct_state(runtime)
+        return unless runtime
+
+        # strategy 1: reconstruct from database (authoritative metadata)
+        reconstruct_from_database(runtime) if @db_available
+
+        # strategy 2: reconstruct from container labels (fallback for
+        # DB loss, DB disabled, or containers from other sessions)
+        reconstruct_from_labels(runtime)
+
+        # ensure next_id doesn't collide with reconstructed environments
+        @mutex.synchronize do
+          max_id = @environments.keys.max || 0
+          @next_id = [@next_id, max_id + 1].max
         end
       end
 
@@ -856,6 +982,126 @@ module Msf
 
       def running?
         @environments.values.any?(&:running?)
+      end
+
+      private
+
+      def reconstruct_from_database(runtime)
+        VulnEnvironment.active.each do |db_env|
+          # Verify the container still exists in the runtime (ground truth)
+          container_info = runtime.inspect(db_env.container_id)
+
+          if container_info.nil?
+            db_env.update!(status: 'orphaned')
+            print_warning("Environment #{db_env.id} container missing. Marked orphaned.")
+            next
+          end
+
+          actual_status = container_info.dig('State', 'Status')
+          if actual_status != 'running' && actual_status != true
+            db_env.update!(status: 'stopped', stopped_at: Time.now)
+            print_warning("Environment #{db_env.id} container is #{actual_status}. Marked stopped.")
+            next
+          end
+
+          # recover allocated_ports from the serialized datastore
+          allocated_ports = {}
+          if db_env.datastore.is_a?(Hash)
+            allocated_ports = db_env.datastore['__allocated_ports'] || {}
+          end
+
+          env = BuiltEnvironment.new(
+            local_id: db_env.id,
+            container_id: db_env.container_id,
+            module_fullname: db_env.module_fullname,
+            env_version: db_env.env_version,
+            runtime: db_env.runtime,
+            image_ref: db_env.image_ref,
+            datastore: db_env.datastore || {},
+            allocated_ports: allocated_ports,
+            created_at: db_env.created_at,
+            started_at: db_env.started_at
+          )
+
+          @environments[db_env.id] = env
+          print_status("Restored environment #{db_env.id}: #{db_env.module_fullname} on port #{db_env.rport}")
+        end
+      rescue => e
+        elog("Database reconstruction failed: #{e.message}")
+      end
+
+      def reconstruct_from_labels(runtime)
+        containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
+
+        containers.each do |container|
+          labels = container.dig('Config', 'Labels') || container['Labels'] || {}
+          env_id = labels['msf.vulnenv.env_id'].to_i
+
+          # skip if already loaded from DB
+          next if @environments.key?(env_id)
+
+          module_fullname = labels['msf.vulnenv.module']
+          version = labels['msf.vulnenv.version']
+          ports = parse_port_label(labels['msf.vulnenv.ports'])
+
+          # reconstruct static metadata from module + YAML definition
+          mod = @framework.modules.create(module_fullname) rescue nil
+          next unless mod
+
+          vuln_env_meta = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
+          next unless vuln_env_meta
+
+          definition_name = vuln_env_meta['definition']
+          profile = vuln_env_meta['profile'] || 'default'
+          overrides = vuln_env_meta['overrides'] || {}
+
+          loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+          config = loader.resolve(definition_name, version, profile, overrides) rescue nil
+          next unless config
+
+          # Build datastore
+          datastore = { 'RHOSTS' => '127.0.0.1' }
+          vuln_env_meta['port_mapping'].each do |container_port, ds_option|
+            datastore[ds_option] = ports[container_port] if ports[container_port]
+          end
+
+          if config['datastore_defaults']
+            config['datastore_defaults'].each do |key, value|
+              datastore[key] = value unless datastore.key?(key)
+            end
+          end
+
+          
+          created_time = Time.parse(container['Created']) rescue Time.now
+          started_time = Time.parse(container.dig('State', 'StartedAt')) rescue Time.now
+
+          env = BuiltEnvironment.new(
+            local_id: env_id,
+            container_id: container['Id'],
+            module_fullname: module_fullname,
+            env_version: version,
+            runtime: runtime.name,
+            image_ref: container['Image'] || config['image'],
+            datastore: datastore,
+            allocated_ports: ports,
+            created_at: created_time,
+            started_at: started_time
+          )
+
+          @environments[env_id] = env
+          print_status("Reconstructed environment #{env_id} from container labels.")
+        end
+      rescue => e
+        elog("Label reconstruction failed: #{e.message}")
+      end
+
+      def parse_port_label(label_value)
+        return {} unless label_value
+
+        label_value.split(',').each_with_object({}) do |pair, hash|
+          host_port, container_port = pair.split(':')
+          hash[container_port.to_i] = host_port.to_i
+        end
       end
     end
 
@@ -1021,7 +1267,13 @@ module Msf
         path = File.join(@base_path, "#{name}.yml")
         raise "Definition not found: #{path}" unless File.exist?(path)
 
-        data = YAML.safe_load(File.read(path), permitted_classes: [Symbol])
+        yaml_content = File.read(path)
+        begin
+          data = YAML.safe_load(yaml_content, permitted_classes: [Symbol])
+        rescue ArgumentError
+          data = YAML.safe_load(yaml_content, [Symbol])
+        end
+
         validate!(data, name)
         data
       end
@@ -1130,6 +1382,7 @@ module Msf
       include Msf::Ui::Console::CommandDispatcher
 
       @@runtime = nil
+      @@registry = nil
 
       def self.registry=(registry)
         @@registry = registry
@@ -1262,6 +1515,8 @@ module Msf
           # 9. Allocate ports using PortAllocator
           # Pass the runtime so PortAllocator can scan Docker/Podman for
           # ports already bound by orphaned containers from previous sessions.
+          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
+          allocated_ports = {}  # {container_port => host_port}
           user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
           # Resolve which container port the user actually wants to override.
           # this ensures RPORT=8081 always targets the port mapped to the
@@ -1566,12 +1821,39 @@ module Msf
     # =====================================================================
     def ensure_database_schema
       return unless framework.db.active
+      return unless defined?(ActiveRecord) && ActiveRecord::Base.connected?
 
-      if framework.db.connection.table_exists?(:vuln_environments)
+      conn = ActiveRecord::Base.connection
+
+      if conn.table_exists?(:vuln_environments)
         return  # Already migrated — idempotent
       end
 
-      CreateVulnEnvironments.migrate(:up)
+      conn.create_table :vuln_environments, id: :serial do |t|
+        t.string  :container_id,    null: false
+        t.string  :image_ref,       null: false
+        t.string  :module_fullname, null: false
+        t.string  :env_version
+        t.string  :profile
+        t.string  :rhost,           default: '127.0.0.1'
+        t.integer :rport,           null: false
+        t.text    :datastore
+        t.string  :runtime,         default: 'docker', null: false
+        t.string  :msf_instance_id
+        t.string  :status,          null: false, default: 'running'
+        t.text    :exploit_command
+        t.timestamps
+        t.datetime :started_at
+        t.datetime :stopped_at
+        t.datetime :removed_at
+      end
+
+      conn.add_index :vuln_environments, :module_fullname
+      conn.add_index :vuln_environments, :status
+      conn.add_index :vuln_environments, :container_id, unique: true
+      conn.add_index :vuln_environments, :msf_instance_id
+      conn.add_index :vuln_environments, [:status, :module_fullname]
+
       print_status("Created vuln_environments table for test_env persistence")
 
     rescue => e
@@ -1582,19 +1864,18 @@ module Msf
     # =====================================================================
     # Plugin Lifecycle
     # =====================================================================
-    def initialize(framework, opts)
-      super
+    def initialize(framework, opts = nil)
+      super(framework, opts)
       @runtime = RuntimeAdapter.detect
       @registry = BuiltEnvironmentRegistry.new(framework)
 
       ensure_database_schema
-      
+
       ConsoleCommandDispatcher.runtime = @runtime
       ConsoleCommandDispatcher.registry = @registry
 
       if @runtime
         print_status("TestEnv plugin loaded. Runtime: #{@runtime.name}")
-        # Verify rootless Podman when applicable
         if @runtime.respond_to?(:verify_rootless)
           ok, msg = @runtime.verify_rootless
           ok ? print_status(msg) : print_warning(msg)
@@ -1603,10 +1884,39 @@ module Msf
         print_error("TestEnv plugin loaded, but no container runtime found.")
         print_error("Install Docker or Podman to use test_env.")
       end
+      @registry.reconstruct_state(@runtime) if @runtime
       add_console_dispatcher(ConsoleCommandDispatcher)
     end
 
+    def preserve_on_exit?
+      val = framework.datastore['TEST_ENV_PRESERVE'] || ENV['TEST_ENV_PRESERVE']
+      return false if val.nil?
+      val.to_s.downcase == 'true' || val.to_s == '1'
+    end
+
     def cleanup
+      if preserve_on_exit?
+        print_status("TEST_ENV_PRESERVE is set. Leaving containers running.")
+        print_status("Run 'test_env remove-all' manually when done.")
+      else
+        print_status("Auto-cleaning test_env environments...")
+        registry = ConsoleCommandDispatcher.registry
+        runtime = ConsoleCommandDispatcher.runtime
+
+        if registry && runtime
+          registry.list.each do |env|
+            begin
+              runtime.stop(env.container_id) if env.running?
+              runtime.remove(env.container_id)
+              registry.update_status(env.local_id, :removed)
+            rescue => e
+              print_warning("Failed to clean up environment #{env.local_id}: #{e.message}")
+            end
+          end
+          registry.remove_all
+        end
+      end
+
       remove_console_dispatcher('TestEnv')
       ConsoleCommandDispatcher.runtime = nil
       ConsoleCommandDispatcher.registry = nil
