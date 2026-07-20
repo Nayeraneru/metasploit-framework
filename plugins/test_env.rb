@@ -1139,6 +1139,8 @@ module Msf
           cmd_test_env_build(args)
         when 'list'
           print_status("TODO: test_env list")
+        when 'modules'
+          cmd_test_env_modules(args)
         when 'stop'
           print_status("TODO: test_env stop")
         when 'start'
@@ -1427,6 +1429,7 @@ module Msf
         print_line("Commands:")
         print_line("  build      Build and launch environment for active module")
         print_line("  list       List tracked environments")
+        print_line("  modules    List all modules with test_env support")
         print_line("  stop <ID>  Stop a running environment")
         print_line("  start <ID> Restart a stopped environment")
         print_line("  remove <ID> Tear down an environment")
@@ -1477,10 +1480,104 @@ module Msf
       rescue => e
         print_error("Status check failed: #{e.message}")
       end
+    
+      def cmd_test_env_modules(args)
+        print_status("Scanning framework modules for test_env support...")
 
+        matches = []
+        scanned = 0
+
+        framework.modules.each do |name, modclass|
+          scanned += 1
+          instance = nil
+
+          begin
+            instance = framework.modules.create(name)
+          rescue => e
+            next
+          end
+
+          next unless instance
+
+          begin
+            raw = instance.send(:module_info)['VulnerableEnvironment']
+            next unless raw
+
+            env = VulnerableEnvironment.new(raw)
+
+            loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+            begin
+              config = loader.resolve(env.definition, env.default_variant, env.profile, env.overrides)
+              image = config['image'] || 'unknown'
+            rescue => e
+              image = "definition error"
+            end
+
+            ports = env.port_mapping.map { |cp, ds| "#{cp}→#{ds}" }.join(', ')
+
+            matches << {
+              fullname: name,
+              definition: env.definition,
+              variant: env.default_variant,
+              profile: env.profile,
+              ports: ports,
+              image: image
+            }
+          rescue => e
+            next
+          end
+        end
+
+        if matches.empty?
+          print_status("No modules with test_env support found.")
+          print_status("Scanned #{scanned} module(s).")
+          return
+        end
+
+        # Try formatted table output first; fall back to plain text if
+        # Rex::Ui::Text::Table isn't loaded yet (common in -q mode).
+        begin
+          tbl = Rex::Ui::Text::Table.new(
+            'Header' => 'Modules with test_env Support',
+            'Columns' => ['Module', 'Definition', 'Variant', 'Profile', 'Ports', 'Image']
+          )
+
+          matches.sort_by { |m| m[:fullname] }.each do |m|
+            tbl << [m[:fullname], m[:definition], m[:variant], m[:profile], m[:ports], m[:image]]
+          end
+
+          print_line(tbl.to_s)
+        rescue NameError
+          print_status("Modules with test_env Support")
+          print_status("=" * 110)
+          print_status(
+            "Module".ljust(50) +
+            "Definition".ljust(12) +
+            "Variant".ljust(10) +
+            "Profile".ljust(10) +
+            "Ports".ljust(12) +
+            "Image"
+          )
+          print_status("-" * 110)
+
+          matches.sort_by { |m| m[:fullname] }.each do |m|
+            print_status(
+              m[:fullname].ljust(50) +
+              m[:definition].ljust(12) +
+              m[:variant].ljust(10) +
+              m[:profile].ljust(10) +
+              m[:ports].ljust(12) +
+              m[:image]
+            )
+          end
+        end
+
+        print_status("Found #{matches.length} module(s) with test_env support (scanned #{scanned} total).")
+      end
+      
       def cmd_test_env_tabs(str, words)
         if words.length == 1
-          return %w[build list stop start remove remove-all exec status help]
+          return %w[build list modules stop start remove remove-all exec status help]
         end
 
         if words.length == 2 && words[0] == 'build'
