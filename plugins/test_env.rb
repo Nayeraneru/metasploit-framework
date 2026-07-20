@@ -10,7 +10,7 @@ require 'timeout'
 require 'net/http'
 
 # =====================================================================
-# Database Migration (Embedded in Plugin)
+# Database Migration
 # =====================================================================
 VULNENV_MIGRATION_BASE = begin
   if ActiveRecord::Migration.respond_to?(:current_version)
