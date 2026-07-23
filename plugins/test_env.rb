@@ -1,3 +1,5 @@
+require 'active_model'
+require 'psych'
 require 'set'
 require 'json'
 require 'yaml'
@@ -9,74 +11,6 @@ require 'fileutils'
 require 'timeout'   
 require 'net/http'
 
-# =====================================================================
-# Database Migration
-# =====================================================================
-VULNENV_MIGRATION_BASE = begin
-  if ActiveRecord::Migration.respond_to?(:current_version)
-    ActiveRecord::Migration[ActiveRecord::Migration.current_version]
-  else
-    ActiveRecord::Migration
-  end
-rescue
-  ActiveRecord::Migration
-end
-
-class CreateVulnEnvironments < VULNENV_MIGRATION_BASE
-  def change
-    create_table :vuln_environments, id: :serial do |t|
-      t.string  :container_id,    null: false
-      t.string  :image_ref,       null: false
-      t.string  :module_fullname, null: false
-      t.string  :env_version
-      t.string  :profile
-      t.string  :rhost,           default: '127.0.0.1'
-      t.integer :rport,           null: false
-      t.text    :datastore        # JSON-serialized hash
-      t.string  :runtime,         default: 'docker', null: false
-      t.string  :msf_instance_id  # For multi-session isolation
-      t.string  :status,          null: false, default: 'running'
-      t.text    :exploit_command
-      t.timestamps
-      t.datetime :started_at
-      t.datetime :stopped_at
-      t.datetime :removed_at
-    end
-
-    add_index :vuln_environments, :module_fullname
-    add_index :vuln_environments, :status
-    add_index :vuln_environments, :container_id, unique: true
-    add_index :vuln_environments, :msf_instance_id
-    add_index :vuln_environments, [:status, :module_fullname]
-  end
-end
-
-# =====================================================================
-# ActiveRecord Model for Persistent Storage
-# =====================================================================
-# Only define if ActiveRecord is loaded. If the user runs msfconsole
-# without a database, ActiveRecord may not be available, and we fall
-# back to YAML persistence silently.
-# =====================================================================
-if defined?(ActiveRecord)
-  class VulnEnvironment < ActiveRecord::Base
-    self.table_name = 'vuln_environments'
-    begin
-      serialize :datastore, coder: JSON
-    rescue ArgumentError
-      serialize :datastore, JSON
-    end
-
-    scope :active,  -> { where(status: ['running', 'stopped']) }
-    scope :running, -> { where(status: 'running') }
-    scope :by_instance, ->(id) { where(msf_instance_id: id) }
-
-    validates :container_id,    presence: true, uniqueness: true
-    validates :module_fullname, presence: true
-    validates :rport,           presence: true, numericality: { only_integer: true }
-    validates :status,          inclusion: { in: %w[running stopped removed orphaned error] }
-  end
-end
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -654,33 +588,40 @@ module Msf
       end
     end
     # =====================================================================
-    # Built Environment (Immutable Value Object)
+    # VulnTarget — ActiveModel-based environment instance
     # =====================================================================
-    class BuiltEnvironment
-      attr_reader :local_id, :container_id, :module_fullname, :env_version,
-                  :runtime, :image_ref, :status,:datastore, :allocated_ports, 
-                  :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
+    class VulnTarget
+      include ActiveModel::Model
+      include ActiveModel::Validations
 
-      def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
-                     runtime:, image_ref:, datastore: {}, allocated_ports: {},
-                     created_at: Time.now, started_at: Time.now, temp_dirs: [])
-        @local_id        = local_id
-        @container_id    = container_id
-        @module_fullname = module_fullname
-        @env_version     = env_version
-        @runtime         = runtime
-        @image_ref       = image_ref
-        @status          = :running
-        @datastore       = datastore.dup.freeze  # Prevent external mutation
-        @created_at      = created_at
-        @started_at      = started_at
-        @stopped_at      = nil
-        @removed_at      = nil
-        @temp_dirs = temp_dirs.dup.freeze
-        @allocated_ports = allocated_ports.dup.freeze
+      attr_accessor :local_id, :container_id, :module_fullname, :env_version,
+                    :runtime, :image_ref, :status, :datastore, :allocated_ports,
+                    :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
+
+      validates :container_id, presence: true
+      validates :module_fullname, presence: true
+      validates :local_id, presence: true, numericality: { only_integer: true }
+
+      def initialize(attrs = {})
+        @datastore = {}
+        @allocated_ports = {}
+        @temp_dirs = []
+        @status = 'running'
+        super
       end
 
-      # Convenience accessors — derived from datastore, not stored redundantly
+      def running?
+        status.to_s == 'running'
+      end
+
+      def stopped?
+        status.to_s == 'stopped'
+      end
+
+      def removed?
+        status.to_s == 'removed'
+      end
+
       def rhost
         datastore['RHOSTS'] || datastore['RHOST']
       end
@@ -689,147 +630,234 @@ module Msf
         datastore['RPORT']
       end
 
-      # All host ports allocated for this environment (for collision detection)
       def all_host_ports
         allocated_ports.values
       end
 
-      def running?
-        status == :running
-      end
-
-      def stopped?
-        status == :stopped
-      end
-
-      def removed?
-        status == :removed
-      end
-
-      # State transitions with timestamp tracking
-      def mark_running
-        @status = :running
-        @started_at = Time.now
-      end
-
-      def mark_stopped
-        @status = :stopped
-        @stopped_at = Time.now
-      end
-
-      def mark_removed
-        @status = :removed
-        @removed_at = Time.now
-      end
-
-      # construct exploit command dynamically from current datastore
       def exploit_command
         datastore.map { |k, v| "set #{k} #{v}" }.join('; ') + '; exploit'
       end
 
-      # Convert to hash for serialization (DB Phase 2) or table output
+      def mark_running
+        self.status = 'running'
+        self.started_at = Time.now
+      end
+
+      def mark_stopped
+        self.status = 'stopped'
+        self.stopped_at = Time.now
+      end
+
+      def mark_removed
+        self.status = 'removed'
+        self.removed_at = Time.now
+      end
+
       def to_h
         {
-          local_id: local_id,
-          container_id: container_id,
-          module_fullname: module_fullname,
-          env_version: env_version,
-          runtime: runtime,
-          image_ref: image_ref,
-          status: status,
-          exploit_command: exploit_command,
-          datastore: datastore,
-          allocated_ports: allocated_ports,
-          all_host_ports: all_host_ports,
-          rhost: rhost,
-          rport: rport,
-          created_at: created_at,
-          started_at: started_at,
-          stopped_at: stopped_at,
-          removed_at: removed_at,
-          temp_dirs: temp_dirs
+          'local_id' => local_id,
+          'container_id' => container_id,
+          'module_fullname' => module_fullname,
+          'env_version' => env_version,
+          'runtime' => runtime,
+          'image_ref' => image_ref,
+          'status' => status,
+          'datastore' => datastore,
+          'allocated_ports' => allocated_ports,
+          'temp_dirs' => temp_dirs,
+          'created_at' => created_at&.iso8601,
+          'started_at' => started_at&.iso8601,
+          'stopped_at' => stopped_at&.iso8601,
+          'removed_at' => removed_at&.iso8601
         }
+      end
+
+      def self.from_h(hash)
+        new(
+          local_id: hash['local_id'],
+          container_id: hash['container_id'],
+          module_fullname: hash['module_fullname'],
+          env_version: hash['env_version'],
+          runtime: hash['runtime'],
+          image_ref: hash['image_ref'],
+          status: hash['status'] || 'running',
+          datastore: hash['datastore'] || {},
+          allocated_ports: hash['allocated_ports'] || {},
+          temp_dirs: hash['temp_dirs'] || [],
+          created_at: parse_time(hash['created_at']),
+          started_at: parse_time(hash['started_at']),
+          stopped_at: parse_time(hash['stopped_at']),
+          removed_at: parse_time(hash['removed_at'])
+        )
+      end
+
+      private
+
+      def self.parse_time(val)
+        return nil if val.nil?
+        Time.parse(val)
+      rescue
+        nil
       end
     end
 
     # =====================================================================
-    # Built Environment Registry
+    # VulnEnvironment — ActiveModel collection of targets
+    # =====================================================================
+    class VulnEnvironment
+      include ActiveModel::Validations
+
+      DEFAULT_VERSION = '1.0.0'
+
+      attr_accessor :version, :instance_id
+
+      validate :valid_targets
+
+      def initialize(version: DEFAULT_VERSION, instance_id: nil, targets: [])
+        raise ArgumentError, "targets must be an Array" unless targets.is_a?(Array)
+
+        @version = version.freeze
+        @instance_id = instance_id
+        @targets = targets
+        @mutex = Mutex.new
+      end
+
+      def add_target(target)
+        @targets << target
+      end
+
+      def remove_target(local_id)
+        @targets.reject! { |t| t.local_id == local_id }
+      end
+
+      def targets
+        @targets.dup.freeze
+      end
+
+      def running_targets
+        @targets.select(&:running?)
+      end
+
+      def find_by_id(local_id)
+        @targets.find { |t| t.local_id == local_id }
+      end
+
+      def find_by_container(container_id)
+        @targets.find { |t| t.container_id == container_id }
+      end
+
+      def used_ports
+        @targets.flat_map(&:all_host_ports).compact
+      end
+
+      def next_id
+        @mutex.synchronize do
+          max_id = @targets.map(&:local_id).max || 0
+          max_id + 1
+        end
+      end
+
+      def to_h
+        {
+          'version' => version,
+          'instance_id' => instance_id,
+          'targets' => @targets.map(&:to_h)
+        }
+      end
+
+      def self.from_h(hash)
+        raw_targets = hash['targets']
+        raise ArgumentError, "targets must be an Array" unless raw_targets.nil? || raw_targets.is_a?(Array)
+
+        new(
+          version: hash['version'] || DEFAULT_VERSION,
+          instance_id: hash['instance_id'],
+          targets: Array(raw_targets).map { |t| VulnTarget.from_h(t) }
+        )
+      end
+
+      private
+
+      def valid_targets
+        @targets.each do |target|
+          next if target.valid?
+
+          target.errors.each do |error|
+            errors.add(:target, error.full_message)
+          end
+        end
+      end
+    end
+
+    # =====================================================================
+    # VulnEnvironmentStore — YAML persistence in ~/.msf4/
+    # =====================================================================
+    class VulnEnvironmentStore
+      DEFAULT_PATH = File.join(Dir.home, '.msf4', 'test_env_registry.yml')
+
+      def initialize(path = DEFAULT_PATH)
+        @path = path
+      end
+
+      def load
+        return VulnEnvironment.new(instance_id: current_instance_id) unless File.exist?(@path)
+
+        File.open(@path, 'r') do |f|
+          f.flock(File::LOCK_SH)
+          yaml_content = f.read
+          hash = Psych.safe_load(yaml_content, permitted_classes: [Symbol, Time, Date])
+          VulnEnvironment.from_h(hash)
+        end
+      rescue Psych::DisallowedClass => e
+        elog("VulnEnvironmentStore: Disallowed class in YAML: #{e.message}")
+        VulnEnvironment.new(instance_id: current_instance_id)
+      rescue => e
+        elog("VulnEnvironmentStore: Failed to load: #{e.message}")
+        VulnEnvironment.new(instance_id: current_instance_id)
+      end
+
+      def save(environment)
+        FileUtils.mkdir_p(File.dirname(@path))
+        File.open(@path, File::RDWR|File::CREAT, 0644) do |f|
+          f.flock(File::LOCK_EX)
+          f.rewind
+          f.write(environment.to_h.to_yaml)
+          f.flush
+          f.truncate(f.pos)
+        end
+      rescue => e
+        elog("VulnEnvironmentStore: Failed to save: #{e.message}")
+      end
+
+      private
+
+      def current_instance_id
+        "msf-#{Socket.gethostname}-#{Process.pid}"
+      end
+    end
+    
+    # =====================================================================
+    # BuiltEnvironmentRegistry — YAML-backed registry
     # =====================================================================
     class BuiltEnvironmentRegistry
-      attr_reader :environments, :framework
+      attr_reader :framework
 
       def initialize(framework)
         @framework = framework
-        @environments = {}  # local_id => BuiltEnvironment
-        @next_id = 1
-        @mutex = Mutex.new
+        @store = VulnEnvironmentStore.new
+        @vuln_env = @store.load
         @instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
-        @db_available = framework.db.active && defined?(VulnEnvironment)
-      end
+        @mutex = Mutex.new
 
-      
-      # Database persistence hooks
-      def persist(env)
-        return unless @db_available
-
-        # Inject allocated_ports into the serialized hash so we can
-        # reconstruct them on startup. the datastore is frozen, so we
-        # dup before serializing.
-        db_datastore = env.datastore.dup
-        db_datastore['__allocated_ports'] = env.allocated_ports.to_h
-
-        VulnEnvironment.create!(
-          id: env.local_id,  # reuse the same ID for consistency
-          container_id: env.container_id,
-          image_ref: env.image_ref,
-          module_fullname: env.module_fullname,
-          env_version: env.env_version,
-          profile: db_datastore['PROFILE'],
-          rhost: env.rhost,
-          rport: env.rport,
-          datastore: db_datastore,
-          runtime: env.runtime,
-          msf_instance_id: @instance_id,
-          status: env.status.to_s,
-          exploit_command: env.exploit_command,
-          created_at: env.created_at,
-          started_at: env.started_at
-        )
-      rescue => e
-        elog("Failed to persist environment to database: #{e.message}")
-      end
-
-      def sync_status_to_db(env)
-        return unless @db_available
-
-        record = VulnEnvironment.find_by(container_id: env.container_id)
-        return unless record
-
-        record.update!(
-          status: env.status.to_s,
-          started_at: env.started_at,
-          stopped_at: env.stopped_at,
-          removed_at: env.removed_at
-        )
-      rescue => e
-        elog("Failed to sync environment status to database: #{e.message}")
-      end
-
-      def reserve_id
-        @mutex.synchronize do
-          id = @next_id
-          @next_id += 1
-          id
-        end
+        
       end
 
       def register(container_id:, module_fullname:, env_version: nil,
                    runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
-          id = @next_id
-          @next_id += 1
+          id = @vuln_env.next_id
 
-          env = BuiltEnvironment.new(
+          target = VulnTarget.new(
             local_id: id,
             container_id: container_id,
             module_fullname: module_fullname,
@@ -838,10 +866,13 @@ module Msf
             image_ref: image_ref,
             datastore: datastore,
             allocated_ports: allocated_ports,
-            temp_dirs: temp_dirs
+            temp_dirs: temp_dirs,
+            created_at: Time.now,
+            started_at: Time.now
           )
 
-          @environments[id] = env
+          @vuln_env.add_target(target)
+          @store.save(@vuln_env)
           id
         end
       end
@@ -849,7 +880,7 @@ module Msf
       def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
                            runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
-          env = BuiltEnvironment.new(
+          target = VulnTarget.new(
             local_id: env_id,
             container_id: container_id,
             module_fullname: module_fullname,
@@ -858,193 +889,107 @@ module Msf
             image_ref: image_ref,
             datastore: datastore,
             allocated_ports: allocated_ports,
-            temp_dirs: temp_dirs
+            temp_dirs: temp_dirs,
+            created_at: Time.now,
+            started_at: Time.now
           )
 
-          @environments[env_id] = env
-          persist(env)
+          @vuln_env.add_target(target)
+          @store.save(@vuln_env)
           env_id
         end
-      end 
+      end
+
+      def reserve_id
+        @mutex.synchronize do
+          @vuln_env = @store.load  # See other sessions' IDs
+          @vuln_env.next_id
+        end
+      end
 
       def get(id)
-        @environments[id]
+        @vuln_env = @store.load
+        @vuln_env.find_by_id(id)
       end
 
       def list
-        @environments.values.sort_by(&:local_id)
+        @vuln_env = @store.load
+        @vuln_env.targets.sort_by(&:local_id)
       end
 
       def update_status(id, status)
-        env_to_sync = nil
+        target = @vuln_env.find_by_id(id)
+        return unless target
 
-        @mutex.synchronize do
-          env = @environments[id]
-          return unless env
-
-          case status.to_sym
-          when :running then env.mark_running
-          when :stopped then env.mark_stopped
-          when :removed then env.mark_removed
-          end
-
-          env_to_sync = env
+        case status.to_sym
+        when :running then target.mark_running
+        when :stopped then target.mark_stopped
+        when :removed then target.mark_removed
         end
 
-        # Sync to DB outside the mutex as DB ops are slow and should not
-        # block other threads from using the registry.
-        sync_status_to_db(env_to_sync) if env_to_sync
+        @store.save(@vuln_env)
       end
 
       def remove(id)
-        dirs_to_clean = []
-        env_to_sync = nil
+        target = @vuln_env.find_by_id(id)
+        return unless target
 
-        @mutex.synchronize do
-          env = @environments[id]
-          return unless env
-
-          dirs_to_clean = env.temp_dirs.dup
-          env.mark_removed
-          env_to_sync = env
-          @environments.delete(id)
-        end
-
-        # sync to DB outside mutex
-        sync_status_to_db(env_to_sync) if env_to_sync
-
-        dirs_to_clean.each do |dir|
+        target.temp_dirs.each do |dir|
           FileUtils.rm_rf(dir) if Dir.exist?(dir)
         end
+
+        @vuln_env.remove_target(id)
+        compact_ids!
+        @store.save(@vuln_env)
       end
 
       def remove_all
-        # this only clears registry records. It does NOT stop containers
-        # the dispatcher must call runtime.stop / runtime.remove on each container first
-        # collect temp directories and mark removed under mutex
-        # but do the actual filesystem cleanup AFTER releasing the mutex
-        envs_to_sync = []
-        envs_to_clean = []
-        
-        @mutex.synchronize do
-          @environments.each_value do |env|
-            env.mark_removed
-            envs_to_sync << env
-            envs_to_clean << env.temp_dirs
-          end
-          @environments.clear
-          @next_id = 1
-        end
-
-        # Sync all statuses outside mutex
-        if @db_available
-          envs_to_sync.each { |env| sync_status_to_db(env) }
-        end
-     
-        # slow filesystem operations happen OUTSIDE the mutex
-        # other threads can now use the registry freely
-        envs_to_clean.each do |dirs|
-          dirs.each do |dir|
+        # Clean up temp directories for all tracked targets
+        @vuln_env.targets.each do |target|
+          target.temp_dirs.each do |dir|
             FileUtils.rm_rf(dir) if Dir.exist?(dir)
           end
         end
+
+        # Hard reset: fresh empty environment state → next_id will return 1
+        @vuln_env = VulnEnvironment.new(instance_id: @instance_id)
+        @store.save(@vuln_env)
       end
-      
-      # State Reconstruction (Startup Recovery)
+
+      def prune_and_compact(runtime)
+        return unless runtime
+
+        # PRUNE: remove registry entries for containers that no longer exist
+        alive_ids = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' }).map { |c| c['ID'] }
+        @vuln_env.targets.each do |target|
+          # docker ps returns short IDs (12 chars), but registry stores full IDs (64 chars)
+          unless alive_ids.any? { |id| target.container_id.start_with?(id) }
+            @vuln_env.remove_target(target.local_id)
+          end
+        end
+        compact_ids! # Renumber after pruning dead entries
+        @store.save(@vuln_env)
+      end
+
       def reconstruct_state(runtime)
         return unless runtime
 
-        # strategy 1: reconstruct from database (authoritative metadata)
-        reconstruct_from_database(runtime) if @db_available
+        prune_and_compact(runtime)
 
-        # strategy 2: reconstruct from container labels (fallback for
-        # DB loss, DB disabled, or containers from other sessions)
-        reconstruct_from_labels(runtime)
-
-        # ensure next_id doesn't collide with reconstructed environments
-        @mutex.synchronize do
-          max_id = @environments.keys.max || 0
-          @next_id = [@next_id, max_id + 1].max
-        end
-      end
-
-      def find_by_container(container_id)
-        @environments.values.find { |e| e.container_id == container_id }
-      end
-
-      def find_by_module(module_fullname)
-        @environments.values.select { |e| e.module_fullname == module_fullname }
-      end
-
-      def used_ports
-        @environments.values.flat_map(&:all_host_ports).compact
-      end
-
-      def running?
-        @environments.values.any?(&:running?)
-      end
-
-      private
-
-      def reconstruct_from_database(runtime)
-        VulnEnvironment.active.each do |db_env|
-          # Verify the container still exists in the runtime (ground truth)
-          container_info = runtime.inspect(db_env.container_id)
-
-          if container_info.nil?
-            db_env.update!(status: 'orphaned')
-            print_warning("Environment #{db_env.id} container missing. Marked orphaned.")
-            next
-          end
-
-          actual_status = container_info.dig('State', 'Status')
-          if actual_status != 'running' && actual_status != true
-            db_env.update!(status: 'stopped', stopped_at: Time.now)
-            print_warning("Environment #{db_env.id} container is #{actual_status}. Marked stopped.")
-            next
-          end
-
-          # recover allocated_ports from the serialized datastore
-          allocated_ports = {}
-          if db_env.datastore.is_a?(Hash)
-            allocated_ports = db_env.datastore['__allocated_ports'] || {}
-          end
-
-          env = BuiltEnvironment.new(
-            local_id: db_env.id,
-            container_id: db_env.container_id,
-            module_fullname: db_env.module_fullname,
-            env_version: db_env.env_version,
-            runtime: db_env.runtime,
-            image_ref: db_env.image_ref,
-            datastore: db_env.datastore || {},
-            allocated_ports: allocated_ports,
-            created_at: db_env.created_at,
-            started_at: db_env.started_at
-          )
-
-          @environments[db_env.id] = env
-          print_status("Restored environment #{db_env.id}: #{db_env.module_fullname} on port #{db_env.rport}")
-        end
-      rescue => e
-        elog("Database reconstruction failed: #{e.message}")
-      end
-
-      def reconstruct_from_labels(runtime)
+        # RECONSTRUCT: add containers found by labels but missing from registry
         containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
 
         containers.each do |container|
           labels = container.dig('Config', 'Labels') || container['Labels'] || {}
-          env_id = labels['msf.vulnenv.env_id'].to_i
 
-          # skip if already loaded from DB
-          next if @environments.key?(env_id)
+          # Identify by container_id, NOT by env_id label (labels are immutable
+          # and become stale after ID compaction)
+          next if @vuln_env.find_by_container(container['ID'])
 
           module_fullname = labels['msf.vulnenv.module']
           version = labels['msf.vulnenv.version']
-          ports = parse_port_label(labels['msf.vulnenv.ports'])
+          ports = decode_port_label(labels['msf.vulnenv.ports'])
 
-          # reconstruct static metadata from module + YAML definition
           mod = @framework.modules.create(module_fullname) rescue nil
           next unless mod
 
@@ -1059,7 +1004,6 @@ module Msf
           config = loader.resolve(definition_name, version, profile, overrides) rescue nil
           next unless config
 
-          # Build datastore
           datastore = { 'RHOSTS' => '127.0.0.1' }
           vuln_env_meta['port_mapping'].each do |container_port, ds_option|
             datastore[ds_option] = ports[container_port] if ports[container_port]
@@ -1071,13 +1015,13 @@ module Msf
             end
           end
 
-          
           created_time = Time.parse(container['Created']) rescue Time.now
           started_time = Time.parse(container.dig('State', 'StartedAt')) rescue Time.now
 
-          env = BuiltEnvironment.new(
-            local_id: env_id,
-            container_id: container['Id'],
+          assigned_id = @vuln_env.next_id
+          target = VulnTarget.new(
+            local_id: assigned_id,
+            container_id: container['ID'],
             module_fullname: module_fullname,
             env_version: version,
             runtime: runtime.name,
@@ -1088,14 +1032,44 @@ module Msf
             started_at: started_time
           )
 
-          @environments[env_id] = env
-          print_status("Reconstructed environment #{env_id} from container labels.")
+          @vuln_env.add_target(target)
+          print_status("Reconstructed environment #{assigned_id} from container labels.")
         end
+
+        @store.save(@vuln_env)
       rescue => e
         elog("Label reconstruction failed: #{e.message}")
       end
 
-      def parse_port_label(label_value)
+      def find_by_container(container_id)
+        @vuln_env.find_by_container(container_id)
+      end
+
+      def find_by_module(module_fullname)
+        @vuln_env = @store.load
+        @vuln_env.targets.select { |t| t.module_fullname == module_fullname }
+      end
+
+      def used_ports
+        @vuln_env = @store.load
+        @vuln_env.used_ports
+      end
+
+      def running?
+        @vuln_env = @store.load
+        @vuln_env.running_targets.any?
+      end
+
+      private
+
+      def compact_ids!
+        sorted = @vuln_env.targets.sort_by(&:local_id)
+        sorted.each_with_index do |target, idx|
+          target.local_id = idx + 1
+        end
+      end
+
+      def decode_port_label(label_value)
         return {} unless label_value
 
         label_value.split(',').each_with_object({}) do |pair, hash|
@@ -1534,7 +1508,10 @@ module Msf
             allocated_ports[container_port] = host_port
           end
 
-          # 10. Build container labels for cross-session identification
+          # 10. Prune manually-removed containers and compact IDs
+          self.class.registry.prune_and_compact(runtime)
+
+          # Build container labels for cross-session identification
           instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
           # reserve the ID first, before starting the container
           env_id = self.class.registry.reserve_id
@@ -1645,7 +1622,6 @@ module Msf
           # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
 
 
-          # 16. Pass the pre-reserved env_id
           self.class.registry.register_with_id(
             env_id: env_id,
             container_id: container_id,
@@ -1816,50 +1792,6 @@ module Msf
       end
     end
 
-    # =====================================================================
-    # Database Schema Management
-    # =====================================================================
-    def ensure_database_schema
-      return unless framework.db.active
-      return unless defined?(ActiveRecord) && ActiveRecord::Base.connected?
-
-      conn = ActiveRecord::Base.connection
-
-      if conn.table_exists?(:vuln_environments)
-        return  # Already migrated — idempotent
-      end
-
-      conn.create_table :vuln_environments, id: :serial do |t|
-        t.string  :container_id,    null: false
-        t.string  :image_ref,       null: false
-        t.string  :module_fullname, null: false
-        t.string  :env_version
-        t.string  :profile
-        t.string  :rhost,           default: '127.0.0.1'
-        t.integer :rport,           null: false
-        t.text    :datastore
-        t.string  :runtime,         default: 'docker', null: false
-        t.string  :msf_instance_id
-        t.string  :status,          null: false, default: 'running'
-        t.text    :exploit_command
-        t.timestamps
-        t.datetime :started_at
-        t.datetime :stopped_at
-        t.datetime :removed_at
-      end
-
-      conn.add_index :vuln_environments, :module_fullname
-      conn.add_index :vuln_environments, :status
-      conn.add_index :vuln_environments, :container_id, unique: true
-      conn.add_index :vuln_environments, :msf_instance_id
-      conn.add_index :vuln_environments, [:status, :module_fullname]
-
-      print_status("Created vuln_environments table for test_env persistence")
-
-    rescue => e
-      print_warning("Could not create test_env database table: #{e.message}")
-      print_warning("Falling back to YAML file persistence.")
-    end
 
     # =====================================================================
     # Plugin Lifecycle
@@ -1868,8 +1800,6 @@ module Msf
       super(framework, opts)
       @runtime = RuntimeAdapter.detect
       @registry = BuiltEnvironmentRegistry.new(framework)
-
-      ensure_database_schema
 
       ConsoleCommandDispatcher.runtime = @runtime
       ConsoleCommandDispatcher.registry = @registry
