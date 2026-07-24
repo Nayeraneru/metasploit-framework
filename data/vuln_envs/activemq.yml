@@ -27,6 +27,9 @@ shared:
     interval: 5
     timeout: 2
     retries: 12
+    credentials:
+      username: admin
+      password: admin
 
   ci:
     exploit:

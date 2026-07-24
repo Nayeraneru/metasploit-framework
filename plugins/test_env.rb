@@ -5,6 +5,8 @@ require 'shellwords'
 require 'tmpdir'
 require 'socket'
 require 'fileutils'
+require 'timeout'   
+require 'net/http'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -474,8 +476,8 @@ module Msf
 
       def self.normalize_pref(raw)
         pref = raw.to_s.downcase.strip
+        return 'auto' if pref.empty?  # Unset env var is not an error
         return pref if %w[auto docker podman].include?(pref)
-        elog("Invalid TEST_ENV_RUNTIME: #{raw.inspect}, falling back to auto")
         'auto'
       end
 
@@ -503,14 +505,25 @@ module Msf
     # =====================================================================
     # Port Allocator
     # =====================================================================
+    # Allocates free host ports for container bindings.
+    # Checks both the current registry AND actively bound Docker/Podman ports
+    # to avoid collisions with orphaned containers from previous sessions.
     class PortAllocator
       EPHEMERAL_START = 49152 unless defined?(EPHEMERAL_START)
       EPHEMERAL_END   = 65535 unless defined?(EPHEMERAL_END)
 
       class NoPortsAvailable < RuntimeError; end
 
-      def initialize(used_ports = [])
+      # runtime: the runtime adapter (DockerRuntime or PodmanRuntime) used to
+      # query already-bound ports from previous sessions.
+      def initialize(runtime = nil, used_ports = [])
+        @runtime = runtime
         @used_ports = Set.new(used_ports)
+
+        # Seed the set with ports already bound by Docker/Podman containers.
+        # This prevents collisions with orphaned containers from previous
+        # msfconsole sessions whose registry state is lost.
+        scan_runtime_ports if @runtime
       end
 
       def allocate(preferred = nil)
@@ -536,6 +549,30 @@ module Msf
 
       private
 
+      # Query the container runtime for ports already bound on the host.
+      # This catches orphaned containers from previous sessions.
+      def scan_runtime_ports
+        return unless @runtime
+
+        begin
+          containers = @runtime.list
+          containers.each do |c|
+            next unless c['Ports'].is_a?(String)
+
+            # Docker ps output format: "127.0.0.1:49153->8161/tcp, 127.0.0.1:49154->80/tcp"
+            # Extract host ports from the binding string.
+            c['Ports'].scan(/:(\d+)->\d+\//).each do |match|
+              port = match[0].to_i
+              @used_ports.add(port) if port.between?(EPHEMERAL_START, EPHEMERAL_END)
+            end
+          end
+        rescue => e
+          # If the runtime query fails, fall back to TCPServer-only checking
+          # This is a graceful degradation, not a fatal error
+          elog("PortAllocator: failed to scan runtime ports: #{e.message}")
+        end
+      end
+
       def available?(port)
         return false if @used_ports.include?(port)
 
@@ -546,17 +583,16 @@ module Msf
         false
       end
     end
-
     # =====================================================================
     # Built Environment (Immutable Value Object)
     # =====================================================================
     class BuiltEnvironment
       attr_reader :local_id, :container_id, :module_fullname, :env_version,
-                  :runtime, :image_ref, :status, :datastore, :created_at, 
-                  :started_at, :stopped_at, :removed_at, :temp_dirs
+                  :runtime, :image_ref, :status,:datastore, :allocated_ports, 
+                  :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
 
       def initialize(local_id:, container_id:, module_fullname:, env_version: nil,
-                     runtime:, image_ref:, datastore: {},
+                     runtime:, image_ref:, datastore: {}, allocated_ports: {},
                      created_at: Time.now, started_at: Time.now, temp_dirs: [])
         @local_id        = local_id
         @container_id    = container_id
@@ -571,6 +607,7 @@ module Msf
         @stopped_at      = nil
         @removed_at      = nil
         @temp_dirs = temp_dirs.dup.freeze
+        @allocated_ports = allocated_ports.dup.freeze
       end
 
       # Convenience accessors — derived from datastore, not stored redundantly
@@ -580,6 +617,11 @@ module Msf
 
       def rport
         datastore['RPORT']
+      end
+
+      # All host ports allocated for this environment (for collision detection)
+      def all_host_ports
+        allocated_ports.values
       end
 
       def running?
@@ -612,7 +654,8 @@ module Msf
 
       # construct exploit command dynamically from current datastore
       def exploit_command
-        datastore.map { |k, v| "set #{k} #{v}" }.join('; ') + '; exploit'
+        opts = datastore.map { |k, v| "#{k}=#{v}" }.join(' ')
+        "exploit #{opts}"
       end
 
       # Convert to hash for serialization (DB Phase 2) or table output
@@ -627,6 +670,8 @@ module Msf
           status: status,
           exploit_command: exploit_command,
           datastore: datastore,
+          allocated_ports: allocated_ports,
+          all_host_ports: all_host_ports,
           rhost: rhost,
           rport: rport,
           created_at: created_at,
@@ -660,7 +705,7 @@ module Msf
       end
 
       def register(container_id:, module_fullname:, env_version: nil,
-                   runtime:, image_ref:, datastore: {}, temp_dirs: [])
+                   runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
           id = @next_id
           @next_id += 1
@@ -673,6 +718,7 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
 
@@ -682,7 +728,7 @@ module Msf
       end
 
       def register_with_id(env_id:, container_id:, module_fullname:, env_version: nil,
-                           runtime:, image_ref:, datastore: {}, temp_dirs: [])
+                           runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
           env = BuiltEnvironment.new(
             local_id: env_id,
@@ -692,6 +738,7 @@ module Msf
             runtime: runtime,
             image_ref: image_ref,
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
 
@@ -740,6 +787,8 @@ module Msf
       end
 
       def remove_all
+        # this only clears registry records. It does NOT stop containers
+        # the dispatcher must call runtime.stop / runtime.remove on each container first
         # collect temp directories and mark removed under mutex
         # but do the actual filesystem cleanup AFTER releasing the mutex
         envs_to_clean = []
@@ -771,11 +820,161 @@ module Msf
       end
 
       def used_ports
-        @environments.values.map(&:rport).compact
+        @environments.values.flat_map(&:all_host_ports).compact
       end
 
       def running?
         @environments.values.any?(&:running?)
+      end
+    end
+
+    # =====================================================================
+    # Health Manager
+    # =====================================================================
+    # waits for a container to become ready using a configurable strategy
+    # supports HTTP (status code), TCP (port open), and Command (exec inside container)
+    class HealthManager
+      def initialize(runtime, container_id, health_config, host_port, dispatcher = nil)
+        @runtime = runtime
+        @container_id = container_id
+        @config = health_config || {}
+        @host_port = host_port
+        @dispatcher = dispatcher
+      end
+
+      # block until the health check passes or retries are exhausted
+      # returns true on success. raises on failure so the caller decides cleanup
+      def wait
+        type = @config['type']
+        interval = @config['interval'] || 5
+        timeout = @config['timeout'] || 2
+        retries = @config['retries'] || 12
+
+        unless %w[http tcp command].include?(type)
+          raise "Unknown health check type: #{type.inspect}"
+        end
+
+        print_status("Waiting for health check (#{type.upcase})...")
+
+        retries.times do |i|
+          print_status("  Attempt #{i + 1}/#{retries}...")
+
+          result = false
+          begin
+            # Wrap each individual check in a timeout so a hanging TCP/HTTP
+            # connection doesn't consume the entire retry budget.
+            Timeout.timeout(timeout) do
+              result = case type
+                       when 'http'    then check_http
+                       when 'tcp'     then check_tcp
+                       when 'command' then check_command
+                       end
+            end
+          rescue Timeout::Error
+            result = false
+          rescue => e
+            # Log debug details but don't spam the console on every retry
+            @dispatcher&.elog("Health check attempt #{i + 1} error: #{e.class} - #{e.message}") if @dispatcher&.respond_to?(:elog)
+            result = false
+          end
+
+          if result
+            print_good("Health check passed.")
+            return true
+          end
+
+          sleep(interval)
+        end
+
+        total_seconds = retries * interval
+        raise "Health check timed out after #{total_seconds} seconds"
+      end
+
+      def print_status(msg)
+        @dispatcher&.print_status(msg)
+      end
+
+      def print_good(msg)
+        @dispatcher&.print_good(msg)
+      end
+
+      def print_error(msg)
+        @dispatcher&.print_error(msg)
+      end
+
+      private
+
+      def check_http
+        path = @config['path'] || '/'
+        expected_status = @config['expected_status'] || 200
+
+        uri = URI("http://127.0.0.1:#{@host_port}#{path}")
+
+        # Explicit timeouts prevent hanging connections from consuming the retry budget.
+        # Timeout.timeout is unreliable with Net::HTTP blocking I/O.
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.open_timeout = 2   # Max seconds to establish TCP connection
+        http.read_timeout = 2   # Max seconds to read response
+
+        request = Net::HTTP::Get.new(uri)
+
+        # If credentials are defined in the health_check config, add Basic Auth.
+        # ActiveMQ's Jolokia endpoint requires this.
+        if @config['credentials'] && @config['credentials']['username']
+          request.basic_auth(
+            @config['credentials']['username'],
+            @config['credentials']['password']
+          )
+        end
+
+        response = http.request(request)
+
+        actual_status = response.code.to_i
+        if actual_status == expected_status
+          true
+        else
+          # Diagnostic output: tell the user what actually came back
+          print_status("  Health check returned #{actual_status}, expected #{expected_status}")
+          false
+        end
+      rescue Errno::ECONNRESET
+        # TCP connection accepted but HTTP server not yet initialized.
+        # This is a transient "not ready" signal — retry on next attempt.
+        print_status("  Connection reset on port #{@host_port} (service still initializing)")
+        false
+
+      rescue Errno::ECONNREFUSED
+        print_status("  Connection refused on port #{@host_port}")
+        false
+
+      rescue Net::OpenTimeout
+        print_status("  Connection timeout on port #{@host_port}")
+        false
+      rescue => e
+        print_status("  Health check error: #{e.class} - #{e.message}")
+        false
+      end
+
+      def check_tcp
+        # A successful connection + immediate close means the port is listening
+        TCPSocket.new('127.0.0.1', @host_port).close
+        true
+      rescue => e
+        false
+      end
+
+      def check_command
+        command = @config['command']
+        expected_output = @config['expected_output']
+
+        output, exit_code = @runtime.exec(@container_id, command)
+        return false unless exit_code == 0
+
+        if expected_output
+          output.include?(expected_output)
+        else
+          true
+        end
       end
     end
 
@@ -940,6 +1139,8 @@ module Msf
           cmd_test_env_build(args)
         when 'list'
           print_status("TODO: test_env list")
+        when 'modules'
+          cmd_test_env_modules(args)
         when 'stop'
           print_status("TODO: test_env stop")
         when 'start'
@@ -1030,21 +1231,25 @@ module Msf
           print_good("Image pulled successfully.")
 
           # 9. Allocate ports using PortAllocator
-          allocator = PortAllocator.new(self.class.registry.used_ports)
+          # Pass the runtime so PortAllocator can scan Docker/Podman for
+          # ports already bound by orphaned containers from previous sessions.
+          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
           allocated_ports = {}  # {container_port => host_port}
           user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
+          # Resolve which container port the user actually wants to override.
+          # this ensures RPORT=8081 always targets the port mapped to the
+          # 'RPORT' datastore key, regardless of Ruby hash insertion order.
+          target_container_port = user_rport ? port_mapping.key('RPORT') : nil
 
           port_mapping.each do |container_port, ds_option|
-            host_port = allocator.allocate(user_rport)
+            preferred = (container_port == target_container_port) ? user_rport : nil
+            host_port = allocator.allocate(preferred)
 
-            if user_rport && host_port != user_rport
-              print_status("Requested port #{user_rport} unavailable. Using dynamically allocated port #{host_port}.")
-            elsif user_rport && port_mapping.length > 1
-              print_status("Note: RPORT override applies to first port mapping only. Additional ports use dynamic allocation.")
+            if preferred && host_port != preferred
+              print_status("Requested port #{preferred} unavailable. Using dynamically allocated port #{host_port}.")
             end
 
             allocated_ports[container_port] = host_port
-            user_rport = nil  # Only use preferred port for first mapping
           end
 
           # 10. Build container labels for cross-session identification
@@ -1085,7 +1290,7 @@ module Msf
 
           # 13. Launch the container
           print_status("Starting container...")
-          container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_i}"
+          container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_f.to_s.delete('.')}"  
           container_id = runtime.run(
             image: config['image'],
             ports: run_ports,
@@ -1116,7 +1321,32 @@ module Msf
 
           print_good("Container started: #{container_id[0..11]}")
 
-          # 14. Build datastore from allocated ports and config defaults
+          # Determine the host port for health checks.
+          # If the module maps a port to 'RPORT', use that. Otherwise fall back
+          # to the first allocated port so health checks don't crash on modules
+          # that use a different datastore key (e.g., auxiliary scanners).
+          primary_container_port = port_mapping.key('RPORT')
+          health_host_port = allocated_ports[primary_container_port] || allocated_ports.values.first
+
+          # 14. wait for health check BEFORE registering the environment
+          # If this fails, the container is cleaned up and the environment is NOT tracked
+          health = config['health_check']
+          begin
+          HealthManager.new(runtime, container_id, health, health_host_port, self).wait
+          rescue => e
+            print_error("Health check failed: #{e.message}")
+
+            # stop and remove the unhealthy container so it doesn't leak
+            begin
+              runtime.stop(container_id) rescue nil
+              runtime.remove(container_id) rescue nil
+            rescue => cleanup_err
+              elog("Failed to cleanup unhealthy container: #{cleanup_err.message}")
+            end
+            return
+          end
+
+          # 15. Build datastore from allocated ports and config defaults
           datastore = { 'RHOSTS' => '127.0.0.1' }
           allocated_ports.each do |container_port, host_port|
             ds_option = port_mapping[container_port]
@@ -1133,7 +1363,7 @@ module Msf
           # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
 
 
-          # 15. Pass the pre-reserved env_id
+          # 16. Pass the pre-reserved env_id
           self.class.registry.register_with_id(
             env_id: env_id,
             container_id: container_id,
@@ -1142,23 +1372,20 @@ module Msf
             runtime: runtime.name,
             image_ref: config['image'],
             datastore: datastore,
+            allocated_ports: allocated_ports,
             temp_dirs: temp_dirs
           )
           # Labels already contain correct env_id from reserve_id above
 
           registered = true
 
-          # 16. Apply datastore to the active module
+          # 17. Apply datastore to the active module
           datastore.each do |key, value|
             mod.datastore[key] = value
           end
 
-          # TODO(Week 5): HealthManager.wait_for_ready(runtime, container_id, config['health_check'])
-          # Wait for health check before reporting ready
-          # health = config['health_check']
-          # HealthManager.new(runtime, container_id, health).wait
 
-          # 17. Display results to user
+          # 18. Display results to user
           print_good("Environment ready.")
           print_status("Environment ID: #{env_id}")
           datastore.each do |key, value|
@@ -1180,6 +1407,9 @@ module Msf
           # Clean up orphaned container if we created one but failed to register it
           if container_id && !registered
             begin
+              # A running container cannot be removed without -f
+              # we stop first to ensure clean removal
+              runtime.stop(container_id) rescue nil
               runtime.remove(container_id)
               print_status("Cleaned up orphaned container #{container_id[0..11]}")
             rescue => cleanup_err
@@ -1199,6 +1429,7 @@ module Msf
         print_line("Commands:")
         print_line("  build      Build and launch environment for active module")
         print_line("  list       List tracked environments")
+        print_line("  modules    List all modules with test_env support")
         print_line("  stop <ID>  Stop a running environment")
         print_line("  start <ID> Restart a stopped environment")
         print_line("  remove <ID> Tear down an environment")
@@ -1249,10 +1480,104 @@ module Msf
       rescue => e
         print_error("Status check failed: #{e.message}")
       end
+    
+      def cmd_test_env_modules(args)
+        print_status("Scanning framework modules for test_env support...")
 
+        matches = []
+        scanned = 0
+
+        framework.modules.each do |name, modclass|
+          scanned += 1
+          instance = nil
+
+          begin
+            instance = framework.modules.create(name)
+          rescue => e
+            next
+          end
+
+          next unless instance
+
+          begin
+            raw = instance.send(:module_info)['VulnerableEnvironment']
+            next unless raw
+
+            env = VulnerableEnvironment.new(raw)
+
+            loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+            begin
+              config = loader.resolve(env.definition, env.default_variant, env.profile, env.overrides)
+              image = config['image'] || 'unknown'
+            rescue => e
+              image = "definition error"
+            end
+
+            ports = env.port_mapping.map { |cp, ds| "#{cp}→#{ds}" }.join(', ')
+
+            matches << {
+              fullname: name,
+              definition: env.definition,
+              variant: env.default_variant,
+              profile: env.profile,
+              ports: ports,
+              image: image
+            }
+          rescue => e
+            next
+          end
+        end
+
+        if matches.empty?
+          print_status("No modules with test_env support found.")
+          print_status("Scanned #{scanned} module(s).")
+          return
+        end
+
+        # Try formatted table output first; fall back to plain text if
+        # Rex::Ui::Text::Table isn't loaded yet (common in -q mode).
+        begin
+          tbl = Rex::Ui::Text::Table.new(
+            'Header' => 'Modules with test_env Support',
+            'Columns' => ['Module', 'Definition', 'Variant', 'Profile', 'Ports', 'Image']
+          )
+
+          matches.sort_by { |m| m[:fullname] }.each do |m|
+            tbl << [m[:fullname], m[:definition], m[:variant], m[:profile], m[:ports], m[:image]]
+          end
+
+          print_line(tbl.to_s)
+        rescue NameError
+          print_status("Modules with test_env Support")
+          print_status("=" * 110)
+          print_status(
+            "Module".ljust(50) +
+            "Definition".ljust(12) +
+            "Variant".ljust(10) +
+            "Profile".ljust(10) +
+            "Ports".ljust(12) +
+            "Image"
+          )
+          print_status("-" * 110)
+
+          matches.sort_by { |m| m[:fullname] }.each do |m|
+            print_status(
+              m[:fullname].ljust(50) +
+              m[:definition].ljust(12) +
+              m[:variant].ljust(10) +
+              m[:profile].ljust(10) +
+              m[:ports].ljust(12) +
+              m[:image]
+            )
+          end
+        end
+
+        print_status("Found #{matches.length} module(s) with test_env support (scanned #{scanned} total).")
+      end
+      
       def cmd_test_env_tabs(str, words)
         if words.length == 1
-          return %w[build list stop start remove remove-all exec status help]
+          return %w[build list modules stop start remove remove-all exec status help]
         end
 
         if words.length == 2 && words[0] == 'build'
