@@ -7032,7 +7032,7 @@
     "autofilter_ports": [],
     "autofilter_services": [],
     "targets": null,
-    "mod_time": "2025-05-21 08:32:40 +0000",
+    "mod_time": "2026-07-02 15:29:38 +0000",
     "path": "/modules/auxiliary/admin/kerberos/ticket_converter.rb",
     "is_install_path": true,
     "ref_name": "admin/kerberos/ticket_converter",
@@ -7372,7 +7372,7 @@
     "autofilter_ports": [],
     "autofilter_services": [],
     "targets": null,
-    "mod_time": "2026-06-04 23:51:23 +0000",
+    "mod_time": "2026-07-06 09:04:47 +0000",
     "path": "/modules/auxiliary/admin/ldap/shadow_credentials.rb",
     "is_install_path": true,
     "ref_name": "admin/ldap/shadow_credentials",
@@ -31650,11 +31650,14 @@
     "disclosure_date": null,
     "type": "auxiliary",
     "author": [
-      "todb <todb@metasploit.com>"
+      "todb <todb@metasploit.com>",
+      "g0tmi1k"
     ],
-    "description": "This module will test FTP logins on a range of machines and\n        report successful logins.  If you have loaded a database plugin\n        and connected to a database this module will record successful\n        logins and hosts so you can track your access.",
+    "description": "This module tests FTP logins on a range of machines. Successful\n          logins are recorded in the database as credentials, along with\n          host information.",
     "references": [
-      "CVE-1999-0502"
+      "CVE-1999-0502",
+      "ATT&CK-T1021",
+      "ATT&CK-T1110.001"
     ],
     "platform": "",
     "arch": "",
@@ -31667,14 +31670,24 @@
       "ftp"
     ],
     "targets": null,
-    "mod_time": "2026-04-02 17:30:43 +0000",
+    "mod_time": "2026-05-29 15:07:34 +0000",
     "path": "/modules/auxiliary/scanner/ftp/ftp_login.rb",
     "is_install_path": true,
     "ref_name": "scanner/ftp/ftp_login",
-    "check": false,
+    "check": true,
     "post_auth": true,
     "default_credential": false,
-    "notes": {},
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "SideEffects": [
+        "artifacts-on-disk",
+        "ioc-in-logs",
+        "account-lockouts"
+      ],
+      "Reliability": []
+    },
     "session_types": false,
     "needs_cleanup": false,
     "actions": []
@@ -112450,8 +112463,9 @@
     "author": [
       "Crypto-Cat"
     ],
-    "description": "This module exploits an argument injection vulnerability in the\n          pull request merge flow of Gogs (<= 0.14.2 and <= 0.15.0+dev).\n\n          The Merge() function in internal/database/pull.go passes the PR\n          base branch name to `git rebase` without a `--` separator. A\n          branch named `--exec=<CMD>` is parsed by Git as the --exec flag\n          rather than a positional argument, causing `sh -c <CMD>` to run\n          after each replayed commit during the rebase.\n\n          Two exploitation methods are supported:\n\n          - own_repo: The attacker creates a temporary repository, enables\n          rebase merge, and operates entirely within their own account.\n          Any authenticated user who can create repositories (the default)\n          can exploit this with no interaction from other users required.\n\n          - existing_repo: The attacker exploits a repository they already\n          have write and merge access to, where \"Rebase before merging\"\n          is enabled (or the attacker has repo admin permissions to\n          enable it). This path is useful on instances where repository\n          creation is restricted.\n\n          Both methods use git to push divergent branches (including the\n          malicious --exec= branch), open a pull request, and trigger a\n          rebase merge to execute the payload. A local git installation\n          is required.\n\n          On Unix targets, the payload is base64-encoded inline in\n          the malicious branch name, avoiding the need to commit files\n          to the repository. On Windows targets, the payload is\n          delivered via a script file committed to the repository,\n          since NTFS forbids pipe characters in filenames. Git for\n          Windows uses MSYS2 sh for --exec commands, enabling\n          cross-platform exploitation.\n\n          Note: a successful rebase merge may leave the server-side\n          repository in a corrupted git state (mid-rebase). For\n          own_repo this is inconsequential because the repository is\n          deleted. For existing_repo this can break the target\n          repository and prevent re-exploitation against the same repo.\n\n          The Gogs API does not support token deletion, so the API\n          access token created during exploitation cannot be removed\n          automatically and will persist under the attacker account.",
+    "description": "This module exploits an argument injection vulnerability (CVE-2026-52806)\n          in the pull request merge flow of Gogs (< 0.14.3).\n\n          The Merge() function in internal/database/pull.go passes the PR\n          base branch name to `git rebase` without a `--` separator. A\n          branch named `--exec=<CMD>` is parsed by Git as the --exec flag\n          rather than a positional argument, causing `sh -c <CMD>` to run\n          after each replayed commit during the rebase.\n\n          Two exploitation methods are supported:\n\n          - own_repo: The attacker creates a temporary repository, enables\n          rebase merge, and operates entirely within their own account.\n          Any authenticated user who can create repositories (the default)\n          can exploit this with no interaction from other users required.\n\n          - existing_repo: The attacker exploits a repository they already\n          have write and merge access to, where \"Rebase before merging\"\n          is enabled (or the attacker has repo admin permissions to\n          enable it). This path is useful on instances where repository\n          creation is restricted.\n\n          Both methods use git to push divergent branches (including the\n          malicious --exec= branch), open a pull request, and trigger a\n          rebase merge to execute the payload. A local git installation\n          is required.\n\n          On Unix targets, the payload is base64-encoded inline in\n          the malicious branch name, avoiding the need to commit files\n          to the repository. On Windows targets, the payload is\n          delivered via a script file committed to the repository,\n          since NTFS forbids pipe characters in filenames. Git for\n          Windows uses MSYS2 sh for --exec commands, enabling\n          cross-platform exploitation.\n\n          Note: a successful rebase merge may leave the server-side\n          repository in a corrupted git state (mid-rebase). For\n          own_repo this is inconsequential because the repository is\n          deleted. For existing_repo this can break the target\n          repository and prevent re-exploitation against the same repo.\n\n          The Gogs API does not support token deletion, so the API\n          access token created during exploitation cannot be removed\n          automatically and will persist under the attacker account.",
     "references": [
+      "CVE-2026-52806",
       "GHSA-qf6p-p7ww-cwr9",
       "URL-https://www.rapid7.com/blog/post/ve-authenticated-rce-via-argument-injection-gogs-unfixed",
       "URL-https://github.com/gogs/gogs"
@@ -112478,7 +112492,7 @@
       "Unix Command",
       "Windows Command"
     ],
-    "mod_time": "2026-06-03 16:27:03 +0000",
+    "mod_time": "2026-07-10 15:40:12 +0000",
     "path": "/modules/exploits/multi/http/gogs_rebase_rce.rb",
     "is_install_path": true,
     "ref_name": "multi/http/gogs_rebase_rce",
@@ -196910,7 +196924,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-05-07 09:13:00 +0000",
+    "mod_time": "2026-07-06 09:43:23 +0000",
     "path": "/modules/exploits/windows/local/ntlm_relay_2_self.rb",
     "is_install_path": true,
     "ref_name": "windows/local/ntlm_relay_2_self",
@@ -299812,6 +299826,37 @@
         "screen-effects"
       ]
     },
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 1,
+    "staged": false
+  },
+  "payload_windows/aarch64/shell_reverse_tcp": {
+    "name": "Windows AArch64 Command Shell, Reverse TCP Inline",
+    "fullname": "payload/windows/aarch64/shell_reverse_tcp",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "vinicius-batistella"
+    ],
+    "description": "Connect back to the attacker and spawn a Windows command shell on a\n          Windows on ARM (AArch64) target. Position-independent shellcode that\n          resolves API addresses via PEB / Export Address Table hashing\n          (Stephen Fewer ROR-13), opens a TCP socket through Winsock, calls\n          WSAConnect, then spawns cmd.exe with stdin/stdout/stderr piped over\n          the socket via CreateProcessA + STARTF_USESTDHANDLES. EXITFUNC is\n          honored via a runtime hash-dispatcher.",
+    "references": [],
+    "platform": "Windows",
+    "arch": "aarch64",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2026-07-24 00:11:10 +0000",
+    "path": "/modules/payloads/singles/windows/aarch64/shell_reverse_tcp.rb",
+    "is_install_path": true,
+    "ref_name": "windows/aarch64/shell_reverse_tcp",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
     "session_types": false,
     "needs_cleanup": false,
     "payload_type": 1,
