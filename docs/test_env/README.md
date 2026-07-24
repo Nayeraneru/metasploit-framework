@@ -8,7 +8,7 @@ This directory contains the architecture and workflow design for the `test_env` 
 |----------|-------------|
 | [01-command-dispatcher.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/architecture/01-command-dispatcher.md) | How `test_env` is added to msfconsole via plugin dispatcher |
 | [02-module-metadata.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/architecture/02-module-metadata.md) | How modules expose `VulnEnv` metadata and how the plugin reads it |
-| [03-database-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/architecture/03-database-schema.md) | Registry persistence: in-memory Phase 1, PostgreSQL Phase 2 |
+| [03-database-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/architecture/03-database-schema.md) | Registry persistence: in-memory Phase 1, YAML Persistence with ActiveModel Phase 2 |
 | [04-environment-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/test_env/architecture/04-environment-schema.md) | YAML schema for shared environment definitions in `data/vuln_envs/` |
 | [05-runtime-adapter.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/05-runtime-adapter.md) | Docker/Podman abstraction, port allocation, container labels |
 

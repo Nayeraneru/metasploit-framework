@@ -182,204 +182,44 @@ docker run -d \
 | Schema evolution | Adding a new label is simpler than versioning a JSON schema |
 | No encoding/decoding complexity | No Base64, no JSON parsing errors |
 
-### State Reconstruction From Labels (Future Enhancement)
-
-```ruby
-def reconstruct_from_labels(runtime)
-  # Step 1: Discover all framework-managed containers via native filter
-  containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
-
-  containers.each do |container|
-    labels = container['Config']['Labels'] || {}
-
-    # Step 2: Skip containers from other msfconsole instances
-    instance_id = labels['msf.vulnenv.instance_id']
-    next unless instance_id == current_instance_id
-
-    # Step 3: Extract minimal dynamic data from labels
-    module_fullname = labels['msf.vulnenv.module']
-    env_id = labels['msf.vulnenv.env_id'].to_i
-    version = labels['msf.vulnenv.version']
-
-    # Parse port mapping: "8081:8080,9090:61616" -> {8080=>8081, 61616=>9090}
-    ports = parse_port_label(labels['msf.vulnenv.ports'])
-
-    # Step 4: Load module and resolve its VulnerableEnvironment definition
-    mod = framework.modules.create(module_fullname)
-    next unless mod
-
-    vuln_env_meta = mod.send(:module_info)['VulnerableEnvironment']
-    next unless vuln_env_meta
-
-    definition_name = vuln_env_meta['definition']
-    profile = vuln_env_meta['profile'] || 'default'
-    overrides = vuln_env_meta['overrides'] || {}
-
-    # Step 5: Resolve environment config from YAML
-    loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
-    config = loader.resolve(definition_name, version, profile, overrides)
-
-    # Step 6: Build datastore from port_mapping + allocated ports
-    datastore = { 'RHOSTS' => '127.0.0.1' }
-    vuln_env_meta['port_mapping'].each do |container_port, ds_option|
-      datastore[ds_option] = ports[container_port]
-    end
-
-    # Step 7: Reconstruct registry entry
-    @environments[env_id] = {
-      local_id: env_id,
-      container_id: container['Id'],
-      module_fullname: module_fullname,
-      env_version: version,
-      rhost: '127.0.0.1',
-      rport: ports.values.first,
-      runtime: runtime.name,
-      image_ref: container['Config']['Image'],
-      status: container['State']['Status'],
-      exploit_command: build_exploit_command(datastore),
-      datastore: datastore,
-      created_at: Time.parse(container['Created']),
-      started_at: Time.parse(container['State']['StartedAt'])
-    }
-
-    @next_id = [@next_id, env_id + 1].max
-  end
-end
-
-# Parse "8081:8080,9090:61616" into {8080=>8081, 61616=>9090}
-def parse_port_label(label_value)
-  return {} unless label_value
-
-  label_value.split(',').each_with_object({}) do |pair, hash|
-    host_port, container_port = pair.split(':')
-    hash[container_port.to_i] = host_port.to_i
-  end
-end
-
-# Build exploit command from datastore
-def build_exploit_command(datastore)
-  cmds = datastore.map { |k, v| "set #{k} #{v}" }
-  cmds.join('; ') + '; exploit'
-end
-```
 
 
-## Phase 2: Database Integration (Week 6+)
+## Phase 2: YAML Persistence with ActiveModel (Week 6+)
 
-When adding PostgreSQL persistence:
+Phase 2 replaces purely in-memory storage with **ActiveModel-backed YAML persistence** in `~/.msf4/test_env_registry.yml`. This provides cross-session state sharing without requiring any framework database changes.
 
-### Migration File
-```ruby
-# db/migrate/20240624000001_create_vuln_environments.rb
-class CreateVulnEnvironments < ActiveRecord::Migration[8.0]
-  def change
-    create_table :vuln_environments, id: :serial do |t|
-      t.string  :container_id,    null: false
-      t.string  :image_ref,       null: false
-      t.string  :module_fullname, null: false
-      t.string  :env_version
-      t.string  :rhost,           default: '127.0.0.1'
-      t.integer :rport,           null: false
-      t.text    :datastore
-      t.string  :runtime,         default: 'docker', null: false
-      t.string  :msf_instance_id
-      t.string  :status,          null: false, default: 'running'
-      t.text    :exploit_command
-      t.timestamps
-      t.datetime :started_at
-      t.datetime :stopped_at
-      t.datetime :removed_at
-    end
-    
-    add_index :vuln_environments, :module_fullname
-    add_index :vuln_environments, :status
-    add_index :vuln_environments, :container_id, unique: true
-    add_index :vuln_environments, :msf_instance_id
-    add_index :vuln_environments, [:status, :module_fullname]
-  end
-end
-```
+### Why ActiveModel + YAML?
 
-### ActiveRecord Model
-```ruby
-class VulnEnvironment < ActiveRecord::Base
-  self.table_name = 'vuln_environments'
-  serialize :datastore, JSON
-  
-  scope :active, -> { where(status: ['running', 'stopped']) }
-  scope :running, -> { where(status: 'running') }
-  scope :by_module, ->(name) { where(module_fullname: name) }
-  
-  validates :container_id, presence: true, uniqueness: true
-  validates :module_fullname, presence: true
-  validates :rport, presence: true, numericality: { only_integer: true }
-  validates :status, inclusion: { in: %w[running stopped removed orphaned error] }
-end
-```
+| Concern | Resolution |
+|---------|-----------|
+| **Framework coupling** | No dependency on `framework.db.active` or PostgreSQL |
+| **Upstream friction** | No migration files, no `metasploit-data-models` coordination |
+| **Portability** | Works in any msfconsole session, even without `msfdb` |
+| **Concurrency** | `flock` file locking enables safe multi-process access |
+| **Security** | `Psych.safe_load` with permitted classes prevents arbitrary code execution |
 
-### Integration With In-Memory Registry
+### Design Overview
 
-```ruby
-class BuiltEnvironmentRegistry
-  def initialize(framework)
-    @framework = framework
-    @environments = {}
-    @next_id = 1
-    load_from_database if database_available?
-  end
-  
-  private
-  
-  def database_available?
-    framework.db.active && defined?(VulnEnvironment)
-  end
-  
-  def load_from_database
-    VulnEnvironment.active.each do |db_env|
-      @environments[@next_id] = {
-        local_id: @next_id,
-        db_id: db_env.id,
-        container_id: db_env.container_id,
-        # ... map all fields ...
-      }
-      @next_id += 1
-    end
-  end
-  
-  def persist_to_database(record)
-    VulnEnvironment.create!(...)
-  end
-end
-```
+- **`VulnTarget`** — `ActiveModel::Model` representing a single provisioned container
+- **`VulnEnvironment`** — `ActiveModel::Validations` collection of all targets
+- **`VulnEnvironmentStore`** — Atomic load/save via `File::LOCK_SH` / `File::LOCK_EX`
 
-## Reference: sessions Table Pattern
+### Cross-Session Behavior
 
-From `db/schema.rb`:
-```ruby
-create_table "sessions", id: :serial, force: :cascade do |t|
-  t.integer "host_id"
-  t.string "stype"
-  t.string "via_exploit"      # Module association
-  t.string "via_payload"
-  t.string "desc"
-  t.integer "port"
-  t.string "platform"
-  t.text "datastore"          # Serialized hash
-  t.datetime "opened_at", precision: nil, null: false
-  t.datetime "closed_at", precision: nil
-  t.string "close_reason"
-  t.integer "local_id"        # In-memory mapping
-  t.datetime "last_seen", precision: nil
-  t.integer "module_run_id"
-  t.index ["module_run_id"], name: "index_sessions_on_module_run_id"
-end
-```
+The YAML file acts as a **single shared registry** across all msfconsole instances:
 
-My `vuln_environments` table follows this exact pattern:
-- `id: :serial` primary key
-- `module_fullname` like `via_exploit`
-- `datastore` serialized text
-- `local_id` equivalent via `env_id` label
-- Lifecycle timestamps (`created_at`, `started_at`, `stopped_at`, `removed_at`)
+- **Global sequential IDs**: All sessions reload the file before allocating, so IDs are sequential globally (1, 2, 3...) regardless of which terminal created them
+- **Compaction on removal**: When an environment is removed, IDs are renumbered to close gaps (1, 2, 4 → 1, 2, 3)
+- **Pruning on startup**: Dead entries (containers that no longer exist) are automatically removed and IDs compacted before new allocations
 
+### State Reconstruction
 
+On startup, the plugin:
+
+1. Loads the shared YAML registry
+2. Queries the runtime for all containers with `label=msf.vulnenv.managed_by=test_env`
+3. Prunes registry entries whose `container_id` no longer exists
+4. Compacts IDs after pruning
+5. Reconstructs any running containers missing from the registry by reading their labels and assigning the next sequential ID
+
+**Important:** Reconstruction uses `container_id` as the ground truth for matching, not the `env_id` label. The `env_id` label becomes stale after ID compaction and is only used as a historical reference.
