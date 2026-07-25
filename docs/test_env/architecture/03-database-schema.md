@@ -208,9 +208,8 @@ Phase 2 replaces purely in-memory storage with **ActiveModel-backed YAML persist
 
 The YAML file acts as a **single shared registry** across all msfconsole instances:
 
-- **Global sequential IDs**: All sessions reload the file before allocating, so IDs are sequential globally (1, 2, 3...) regardless of which terminal created them
-- **Compaction on removal**: When an environment is removed, IDs are renumbered to close gaps (1, 2, 4 → 1, 2, 3)
-- **Pruning on startup**: Dead entries (containers that no longer exist) are automatically removed and IDs compacted before new allocations
+- **Sparse monotonic IDs**: IDs are allocated sequentially but never renumbered. Removing environment 2 from `[1, 2, 3]` yields `[1, 3]`, not `[1, 2]`. This matches the Metasploit `sessions` table behavior and prevents identity-shift bugs during batch operations.
+- **Pruning on startup**: Dead entries (containers that no longer exist) are automatically removed. IDs are **not** compacted after pruning — sparse IDs remain stable.
 
 ### State Reconstruction
 
@@ -219,7 +218,6 @@ On startup, the plugin:
 1. Loads the shared YAML registry
 2. Queries the runtime for all containers with `label=msf.vulnenv.managed_by=test_env`
 3. Prunes registry entries whose `container_id` no longer exists
-4. Compacts IDs after pruning
-5. Reconstructs any running containers missing from the registry by reading their labels and assigning the next sequential ID
+4. Reconstructs any running containers missing from the registry by reading their labels and assigning the next monotonic ID
 
-**Important:** Reconstruction uses `container_id` as the ground truth for matching, not the `env_id` label. The `env_id` label becomes stale after ID compaction and is only used as a historical reference.
+**Important:** Reconstruction uses `container_id` as the ground truth for matching, not the `env_id` label. Because IDs are never compacted, `env_id` labels remain stable references, but `container_id` is still the authoritative identifier.
