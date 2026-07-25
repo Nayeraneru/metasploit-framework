@@ -945,7 +945,6 @@ module Msf
         end
 
         @vuln_env.remove_target(id)
-        #compact_ids!
         @store.save(@vuln_env)
       end
 
