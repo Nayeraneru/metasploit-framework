@@ -962,7 +962,7 @@ module Msf
         @store.save(@vuln_env)
       end
 
-      def prune_and_compact(runtime)
+      def prune(runtime)
         return unless runtime
 
         # PRUNE: remove registry entries for containers that no longer exist
@@ -972,16 +972,13 @@ module Msf
             @vuln_env.remove_target(target.local_id)
           end
         end
-        # NOTE: We do NOT compact IDs here. Sparse IDs are stable references.
-        # Compaction during batch operations causes identity shift bugs.
-        #compact_ids! # Renumber after pruning dead entries
         @store.save(@vuln_env)
       end
 
       def reconstruct_state(runtime)
         return unless runtime
 
-        prune_and_compact(runtime)
+        prune(runtime)
 
         # RECONSTRUCT: add containers found by labels but missing from registry
         containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
@@ -1068,13 +1065,6 @@ module Msf
       end
 
       private
-
-      #def compact_ids!
-        #sorted = @vuln_env.targets.sort_by(&:local_id)
-        #sorted.each_with_index do |target, idx|
-          #target.local_id = idx + 1
-        #end
-      #end
 
       def decode_port_label(label_value)
         return {} unless label_value
@@ -1518,7 +1508,7 @@ module Msf
           end
 
           # 10. Prune manually-removed containers and compact IDs
-          self.class.registry.prune_and_compact(runtime)
+          self.class.registry.prune(runtime)
 
           # Build container labels for cross-session identification
           instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
