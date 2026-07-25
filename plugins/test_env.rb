@@ -11,7 +11,6 @@ require 'fileutils'
 require 'timeout'   
 require 'net/http'
 
-
 module Msf
   class Plugin::TestEnv < Msf::Plugin
     # =====================================================================
@@ -853,6 +852,12 @@ module Msf
         
       end
 
+      # Docker run returns full 64-char IDs, but docker ps returns short 12-char IDs.
+      # Normalize to short form so registry lookups and runtime queries are consistent.
+      def normalize_container_id(id)
+        id.to_s[0, 12]
+      end
+
       def register(container_id:, module_fullname:, env_version: nil,
                    runtime:, image_ref:, datastore: {}, allocated_ports: {}, temp_dirs: [])
         @mutex.synchronize do
@@ -860,7 +865,7 @@ module Msf
 
           target = VulnTarget.new(
             local_id: id,
-            container_id: container_id,
+            container_id: normalize_container_id(container_id),
             module_fullname: module_fullname,
             env_version: env_version,
             runtime: runtime,
@@ -883,7 +888,7 @@ module Msf
         @mutex.synchronize do
           target = VulnTarget.new(
             local_id: env_id,
-            container_id: container_id,
+            container_id: normalize_container_id(container_id),
             module_fullname: module_fullname,
             env_version: env_version,
             runtime: runtime,
@@ -940,7 +945,7 @@ module Msf
         end
 
         @vuln_env.remove_target(id)
-        compact_ids!
+        #compact_ids!
         @store.save(@vuln_env)
       end
 
@@ -963,12 +968,13 @@ module Msf
         # PRUNE: remove registry entries for containers that no longer exist
         alive_ids = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' }).map { |c| c['ID'] }
         @vuln_env.targets.each do |target|
-          # docker ps returns short IDs (12 chars), but registry stores full IDs (64 chars)
-          unless alive_ids.any? { |id| target.container_id.start_with?(id) }
+          unless alive_ids.any? { |id| target.container_id == id }
             @vuln_env.remove_target(target.local_id)
           end
         end
-        compact_ids! # Renumber after pruning dead entries
+        # NOTE: We do NOT compact IDs here. Sparse IDs are stable references.
+        # Compaction during batch operations causes identity shift bugs.
+        #compact_ids! # Renumber after pruning dead entries
         @store.save(@vuln_env)
       end
 
@@ -1063,12 +1069,12 @@ module Msf
 
       private
 
-      def compact_ids!
-        sorted = @vuln_env.targets.sort_by(&:local_id)
-        sorted.each_with_index do |target, idx|
-          target.local_id = idx + 1
-        end
-      end
+      #def compact_ids!
+        #sorted = @vuln_env.targets.sort_by(&:local_id)
+        #sorted.each_with_index do |target, idx|
+          #target.local_id = idx + 1
+        #end
+      #end
 
       def decode_port_label(label_value)
         return {} unless label_value
@@ -1397,17 +1403,17 @@ module Msf
         when 'build'
           cmd_test_env_build(args)
         when 'list'
-          print_status("TODO: test_env list")
+          cmd_test_env_list(args)
         when 'modules'
           cmd_test_env_modules(args)
         when 'stop'
-          print_status("TODO: test_env stop")
+          cmd_test_env_stop(args)
         when 'start'
-          print_status("TODO: test_env start")
+          cmd_test_env_start(args)
         when 'remove'
-          print_status("TODO: test_env remove")
+          cmd_test_env_remove(args)
         when 'remove-all'
-          print_status("TODO: test_env remove-all")
+          cmd_test_env_remove_all(args)
         when 'exec'
           print_status("TODO: test_env exec")
         when 'status'
@@ -1741,6 +1747,242 @@ module Msf
       rescue => e
         print_error("Status check failed: #{e.message}")
       end
+      def cmd_test_env_list(_args = [])
+        targets = self.class.registry.list
+
+        if targets.empty?
+          print_status("No environments currently tracked.")
+          return
+        end
+
+        # Build rows first so fallback mode can reuse them
+        rows = targets.map do |t|
+          [
+            t.local_id.to_s,
+            t.container_id.to_s[0..11],
+            t.module_fullname.to_s,
+            t.rhost || '127.0.0.1',
+            t.rport.to_s,
+            t.status.to_s,
+            t.env_version.to_s
+          ]
+        end
+
+        begin
+          tbl = Rex::Ui::Text::Table.new(
+            'Header'     => 'Test Environments',
+            'Indent'     => 1,
+            'Columns'    => ['ID', 'Container', 'Module', 'RHOST', 'RPORT', 'Status', 'Version']
+          )
+
+          rows.each { |r| tbl << r }
+          print_line(tbl.to_s)
+        rescue NameError
+          # Rex::Ui::Text::Table not yet loaded in this msfconsole context
+          print_status("Test Environments")
+          print_status("=" * 100)
+          print_status(
+            ['ID', 'Container', 'Module', 'RHOST', 'RPORT', 'Status', 'Version']
+              .map { |h| h.ljust(12) }.join
+          )
+          print_status("-" * 100)
+          rows.each do |r|
+            print_status(r.map { |cell| cell.to_s.ljust(12) }.join)
+          end
+        end
+
+        print_status("#{targets.length} environment(s) tracked.")
+      end
+
+      def cmd_test_env_start(args)
+        if args.empty?
+          print_error("Usage: test_env start <ID>")
+          return
+        end
+
+        # start accepts single ID for safety (per your Week 1 spec)
+        id = args.first.to_i
+        target = self.class.registry.get(id)
+
+        unless target
+          print_error("Environment #{id} not found.")
+          return
+        end
+
+        unless target.stopped?
+          print_warning("Environment #{id} is already #{target.status}.")
+          return
+        end
+
+        runtime = self.class.runtime
+        unless runtime
+          print_error("No container runtime available.")
+          return
+        end
+
+        begin
+          unless runtime.start(target.container_id)
+            print_error("Failed to start container for environment #{id}.")
+            return
+          end
+
+          # Reconstruct health check configuration
+          mod = framework.modules.create(target.module_fullname) rescue nil
+          if mod
+            raw = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
+            if raw
+              env_meta = VulnerableEnvironment.new(raw)
+              loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+              config = loader.resolve(env_meta.definition, target.env_version,
+                                      env_meta.profile, env_meta.overrides) rescue nil
+
+              if config && config['health_check']
+                # Determine which host port to health-check
+                primary_port = target.allocated_ports[env_meta.port_mapping.key('RPORT')]
+                health_port = primary_port || target.allocated_ports.values.first
+
+                begin
+                  HealthManager.new(runtime, target.container_id,
+                                  config['health_check'], health_port, self).wait
+                rescue => e
+                  print_warning("Health check warning after start: #{e.message}")
+                  # Container started; we still mark running but warn user
+                end
+              end
+            end
+          end
+
+          self.class.registry.update_status(id, :running)
+          print_good("Environment #{id} started. RPORT=#{target.rport}")
+        rescue => e
+          print_error("Error starting environment #{id}: #{e.message}")
+        end
+      end
+
+      def cmd_test_env_stop(args)
+        if args.empty?
+          print_error("Usage: test_env stop <ID range>")
+          return
+        end
+
+        ids = parse_id_range(args.first)
+        if ids.empty?
+          print_error("No valid IDs provided.")
+          return
+        end
+
+        runtime = self.class.runtime
+        unless runtime
+          print_error("No container runtime available.")
+          return
+        end
+
+        ids.each do |id|
+          target = self.class.registry.get(id)
+          unless target
+            print_error("Environment #{id} not found.")
+            next
+          end
+
+          unless target.running?
+            print_warning("Environment #{id} is already #{target.status}.")
+            next
+          end
+
+          begin
+            if runtime.stop(target.container_id)
+              self.class.registry.update_status(id, :stopped)
+              print_good("Environment #{id} stopped.")
+            else
+              print_error("Failed to stop container for environment #{id}.")
+            end
+          rescue => e
+            print_error("Error stopping environment #{id}: #{e.message}")
+          end
+        end
+      end
+
+      def cmd_test_env_remove(args)
+        if args.empty?
+          print_error("Usage: test_env remove <ID range>")
+          return
+        end
+
+        ids = parse_id_range(args.first)
+        if ids.empty?
+          print_error("No valid IDs provided.")
+          return
+        end
+
+        runtime = self.class.runtime
+        unless runtime
+          print_error("No container runtime available.")
+          return
+        end
+
+        # Resolve all targets FIRST before any mutation
+        targets = ids.map { |id| [id, self.class.registry.get(id)] }.to_h
+
+        # Validate all exist before attempting any removal
+        missing = targets.select { |_id, t| t.nil? }.keys
+        missing.each { |id| print_error("Environment #{id} not found.") }
+
+        valid_ids = targets.reject { |_id, t| t.nil? }.keys
+
+        valid_ids.each do |id|
+          target = targets[id]
+
+          begin
+            runtime.stop(target.container_id) if target.running?
+          rescue => e
+            print_warning("Stop warning for #{id}: #{e.message}")
+          end
+
+          begin
+            runtime.remove(target.container_id)
+          rescue => e
+            print_error("Failed to remove container for environment #{id}: #{e.message}")
+            next  # DO NOT purge registry if runtime removal failed
+          end
+
+          self.class.registry.remove(id)
+          print_good("Environment #{id} removed.")
+        end
+      end
+
+      def cmd_test_env_remove_all(_args = [])
+        runtime = self.class.runtime
+        unless runtime
+          print_error("No container runtime available.")
+          return
+        end
+
+        targets = self.class.registry.list
+        if targets.empty?
+          print_status("No environments to remove.")
+          return
+        end
+
+        print_status("Tearing down #{targets.length} environment(s)...")
+
+        targets.each do |target|
+          begin
+            runtime.stop(target.container_id) if target.running?
+          rescue => e
+            print_warning("Stop warning for #{target.local_id}: #{e.message}")
+          end
+
+          begin
+            runtime.remove(target.container_id)
+          rescue => e
+            print_warning("Remove warning for #{target.local_id}: #{e.message}")
+          end
+        end
+
+        # Atomic registry reset
+        self.class.registry.remove_all
+        print_good("All environments removed.")
+      end
     
       def cmd_test_env_modules(args)
         print_status("Scanning framework modules for test_env support...")
@@ -1848,7 +2090,7 @@ module Msf
         if words.length == 2
           case words[0]
           when 'stop', 'start', 'remove', 'exec'
-            return []
+            return self.class.registry.list.map(&:local_id).map(&:to_s)
           end
         end
 
@@ -1888,8 +2130,27 @@ module Msf
         end
         options
       end
-    end
 
+      # Parses "1", "1-3", "1,3,5", "1-3,5,7-9" into [1, 2, 3, 5, 7, 8, 9]
+      def parse_id_range(range_str)
+        return [] if range_str.nil? || range_str.empty?
+
+        ids = []
+        range_str.split(',').each do |part|
+          part.strip!
+          if part.include?('-')
+            start_id, end_id = part.split('-', 2).map(&:to_i)
+            ids.concat((start_id..end_id).to_a)
+          else
+            ids << part.to_i
+          end
+        end
+        ids.uniq.sort
+      rescue => e
+        print_error("Invalid ID range format: #{range_str}")
+        []
+      end
+    end
 
     # =====================================================================
     # Plugin Lifecycle
