@@ -1415,270 +1415,309 @@ module Msf
         end
       end
 
-      def cmd_test_env_build(args)
-        begin
-          container_id = nil   # Track for cleanup
-          registered = false # Track whether registration succeeded
-          
-          # 1. Preconditions
-          mod = driver.active_module
-          unless mod
-            print_error("No active module. Use 'use <module>' first.")
-            return
-          end
+def cmd_test_env_build(args)
+  container_id = nil
+  registered   = false
+  runtime      = nil
 
-          # 2. Read and validate module metadata
-          env = vulnerable_environment(mod)
-          unless env
-            print_error("Module does not define a vulnerable environment configuration.")
-            return
-          end
+  begin
+    # Steps 1-3: validate module, metadata, and user arguments
+    mod, env, options = build_validate_prerequisites(args)
+    return unless mod && env
 
-          # 3. Parse user arguments
-          options = parse_build_args(args)
+    # Steps 4-7: resolve definition, variant, profile, and config
+    definition_name, variant, profile, config, port_mapping = build_resolve_environment(mod, env, options)
+    return unless definition_name
 
-          # 4. Extract references from validated Struct
-          definition_name = env.definition
-          default_variant = env.default_variant
-          port_mapping    = env.port_mapping
+    # Step 6: runtime availability
+    runtime = self.class.runtime
+    unless runtime
+      print_error("No container runtime available. Install Docker or Podman.")
+      return
+    end
 
-          # 5. Determine variant and profile
-          variant = options['VARIANT'].to_s.empty? ? default_variant : options['VARIANT']
-          profile = options['PROFILE'].to_s.empty? ? env.profile : options['PROFILE']
+    # Step 8: pull image
+    return unless build_pull_image(runtime, config)
 
-          unless variant
-            print_error("No variant specified and module has no default_variant.")
-            return
-          end
+    # Step 9: allocate host ports
+    allocated_ports = build_allocate_ports(runtime, port_mapping, options)
 
-          # 6. Check runtime availability
-          runtime = self.class.runtime
-          unless runtime
-            print_error("No container runtime available. Install Docker or Podman.")
-            return
-          end
+    # Steps 10-12: prune registry, build labels, prepare volumes
+    labels, run_ports, volumes, temp_dirs, env_id = build_prepare_resources(
+      runtime, config, definition_name, variant, mod, allocated_ports
+    )
 
-          # 7. Load and resolve environment definition
-          loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
-          config = loader.resolve(definition_name, variant, profile, env.overrides)
+    # Step 13: launch container
+    container_id = build_launch_container(runtime, config, run_ports, labels, volumes, definition_name, variant)
 
-          # Validate: every port in module's port_mapping must exist in the environment's exposed ports
-          resolved_ports = config.fetch('ports', {}).values.map(&:to_i)
-          port_mapping.keys.each do |container_port|
-            port_int = container_port.to_i
-            unless resolved_ports.include?(port_int)
-              available = resolved_ports.join(', ')
-              raise "Port mapping mismatch: module maps port #{port_int} but environment '#{definition_name}' (variant '#{variant}', profile '#{profile}') only exposes ports: #{available}"
-            end
-          end
+    # verify container actually started
+    container_info = runtime.inspect(container_id)
+    unless container_info
+      print_error("Container started but inspect failed immediately.")
+      runtime.remove(container_id)
+      return
+    end
 
-          print_status("Resolving environment for #{mod.fullname}...")
-          print_status("Definition: #{definition_name} | Variant: #{variant} | Profile: #{profile}")
-          print_status("Image: #{config['image']}")
+    # check if running (Docker/Podman both use State.Status)
+    status = container_info.dig('State', 'Status') || container_info.dig('State', 'Running')
+    if status != 'running' && status != true
+      error_msg = container_info.dig('State', 'Error') || 'unknown'
+      print_error("Container failed to start. Status: #{status.inspect}, Error: #{error_msg}")
+      runtime.remove(container_id)
+      return
+    end
 
-          # 8. Pull the container image
-          print_status("Pulling image #{config['image']}...")
-          unless runtime.pull(config['image'])
-            print_error("Failed to pull image: #{config['image']}")
-            return
-          end
-          print_good("Image pulled successfully.")
+    print_good("Container started: #{container_id[0..11]}")
 
-          # 9. Allocate ports using PortAllocator
-          # Pass the runtime so PortAllocator can scan Docker/Podman for
-          # ports already bound by orphaned containers from previous sessions.
-          allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
-          allocated_ports = {}  # {container_port => host_port}
-          user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
-          # Resolve which container port the user actually wants to override.
-          # this ensures RPORT=8081 always targets the port mapped to the
-          # 'RPORT' datastore key, regardless of Ruby hash insertion order.
-          target_container_port = user_rport ? port_mapping.key('RPORT') : nil
+    # Step 14: health check BEFORE registering
+    return unless build_wait_for_health(runtime, container_id, config, port_mapping, allocated_ports)
 
-          port_mapping.each do |container_port, ds_option|
-            preferred = (container_port == target_container_port) ? user_rport : nil
-            host_port = allocator.allocate(preferred)
+    # Steps 15-16: register environment in registry
+    datastore = build_register_environment(
+      runtime, container_id, mod, variant, config, allocated_ports, port_mapping, temp_dirs, env_id
+    )
+    registered = true
 
-            if preferred && host_port != preferred
-              print_status("Requested port #{preferred} unavailable. Using dynamically allocated port #{host_port}.")
-            end
+    # Step 17: apply datastore to the active module
+    datastore.each do |key, value|
+      mod.datastore[key] = value
+    end
 
-            allocated_ports[container_port] = host_port
-          end
+    # Step 18: display results to user
+    build_display_results(env_id, config, datastore)
 
-          # 10. Prune manually-removed containers and compact IDs
-          self.class.registry.prune(runtime)
-
-          # Build container labels for cross-session identification
-          instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
-          # reserve the ID first, before starting the container
-          env_id = self.class.registry.reserve_id
-
-          # now build labels with the GUARANTEED ID
-          labels = runtime.build_labels(
-            instance_id: instance_id,
-            module_fullname: mod.fullname,
-            env_id: env_id,
-            version: variant,
-            ports: allocated_ports
-          )
-
-          # 11. Prepare port mappings for docker run
-          # Format: {container_port => host_port} for runtime.run
-          run_ports = {}
-          allocated_ports.each do |container_port, host_port|
-            run_ports[container_port] = host_port
-          end
-
-          # 12. Prepare volumes from config
-          volumes = {}
-          temp_dirs = []
-
-          if config['volumes']
-            config['volumes'].each do |name, vol_cfg|
-              host_path = vol_cfg['host_path']
-              unless host_path  # <-- CHANGED: split the || into two lines
-                host_path = Dir.mktmpdir("test_env_#{name}_")
-                temp_dirs << host_path  # <-- ADD THIS LINE
-              end
-              volumes[host_path] = vol_cfg['container_path']
-            end
-          end
-
-          # 13. Launch the container
-          print_status("Starting container...")
-          container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_f.to_s.delete('.')}"  
-          container_id = runtime.run(
-            image: config['image'],
-            ports: run_ports,
-            labels: labels,
-            volumes: volumes,
-            name: container_name
-          )
-
-          # verify container actually started
-          container_info = runtime.inspect(container_id)
-          unless container_info
-            print_error("Container started but inspect failed immediately.")
-            runtime.remove(container_id)
-            return
-          end
-
-          # check if running (Docker/Podman both use State.Status)
-          status = container_info.dig('State', 'Status') || container_info.dig('State', 'Running')
-          if status != 'running' && status != true
-            # Try to get the error reason
-            error_msg = container_info.dig('State', 'Error') || 'unknown'
-            print_error("Container failed to start. Status: #{status.inspect}, Error: #{error_msg}")
-
-            # clean up the dead container
-            runtime.remove(container_id)
-            return
-          end
-
-          print_good("Container started: #{container_id[0..11]}")
-
-          # Determine the host port for health checks.
-          # If the module maps a port to 'RPORT', use that. Otherwise fall back
-          # to the first allocated port so health checks don't crash on modules
-          # that use a different datastore key (e.g., auxiliary scanners).
-          primary_container_port = port_mapping.key('RPORT')
-          health_host_port = allocated_ports[primary_container_port] || allocated_ports.values.first
-
-          # 14. wait for health check BEFORE registering the environment
-          # If this fails, the container is cleaned up and the environment is NOT tracked
-          health = config['health_check']
-          begin
-          HealthManager.new(runtime, container_id, health, health_host_port, self).wait
-          rescue => e
-            print_error("Health check failed: #{e.message}")
-
-            # stop and remove the unhealthy container so it doesn't leak
-            begin
-              runtime.stop(container_id) rescue nil
-              runtime.remove(container_id) rescue nil
-            rescue => cleanup_err
-              elog("Failed to cleanup unhealthy container: #{cleanup_err.message}")
-            end
-            return
-          end
-
-          # 15. Build datastore from allocated ports and config defaults
-          datastore = { 'RHOSTS' => '127.0.0.1' }
-          allocated_ports.each do |container_port, host_port|
-            ds_option = port_mapping[container_port]
-            datastore[ds_option] = host_port if ds_option
-          end
-
-          # Apply datastore_defaults from environment definition
-          if config['datastore_defaults']
-            config['datastore_defaults'].each do |key, value|
-              datastore[key] = value unless datastore.key?(key)  # Don't override port mappings
-            end
-          end
-
-          # TODO(Week 8): If module requires payload, auto-set PAYLOAD, LHOST, LPORT
-
-
-          self.class.registry.register_with_id(
-            env_id: env_id,
-            container_id: container_id,
-            module_fullname: mod.fullname,
-            env_version: variant,
-            runtime: runtime.name,
-            image_ref: config['image'],
-            datastore: datastore,
-            allocated_ports: allocated_ports,
-            temp_dirs: temp_dirs
-          )
-          # Labels already contain correct env_id from reserve_id above
-
-          registered = true
-
-          # 17. Apply datastore to the active module
-          datastore.each do |key, value|
-            mod.datastore[key] = value
-          end
-
-
-          # 18. Display results to user
-          print_good("Environment ready.")
-          print_status("Environment ID: #{env_id}")
-          datastore.each do |key, value|
-            print_status("   #{key.ljust(12)} => #{value}")
-          end
-
-          if config['credentials'] && config['credentials']['default']
-            creds = config['credentials']['default']
-            print_status("   #{'USERNAME'.ljust(12)} => #{creds['username']}")
-            print_status("   #{'PASSWORD'.ljust(12)} => #{creds['password']}")
-          end
-
-          env = self.class.registry.get(env_id)
-          print_status("Suggested: #{env.exploit_command}")
-
-        rescue PortAllocator::NoPortsAvailable => e
-          print_error("No available ports: #{e.message}")
-        rescue => e
-          # Clean up orphaned container if we created one but failed to register it
-          if container_id && !registered
-            begin
-              # A running container cannot be removed without -f
-              # we stop first to ensure clean removal
-              runtime.stop(container_id) rescue nil
-              runtime.remove(container_id)
-              print_status("Cleaned up orphaned container #{container_id[0..11]}")
-            rescue => cleanup_err
-              elog("Failed to cleanup orphaned container: #{cleanup_err.message}")
-            end
-          end
-
-          print_error("test_env build failed: #{e.message}")
-          elog("test_env build error: #{e.class} - #{e.message}")
-          elog(e.backtrace.join("\n"))
-        end
+  rescue PortAllocator::NoPortsAvailable => e
+    print_error("No available ports: #{e.message}")
+  rescue => e
+    # Clean up orphaned container if we created one but failed to register it
+    if container_id && !registered
+      begin
+        runtime.stop(container_id) rescue nil
+        runtime.remove(container_id)
+        print_status("Cleaned up orphaned container #{container_id[0..11]}")
+      rescue => cleanup_err
+        elog("Failed to cleanup orphaned container: #{cleanup_err.message}")
       end
+    end
 
+    print_error("test_env build failed: #{e.message}")
+    elog("test_env build error: #{e.class} - #{e.message}")
+    elog(e.backtrace.join("\n"))
+  end
+end
+
+# -------------------------------------------------------------------------
+# Build Phase Helpers
+# -------------------------------------------------------------------------
+
+# Steps 1-3: Preconditions, metadata validation, and argument parsing.
+# Returns [mod, env, options] or [nil, nil, nil] on failure.
+def build_validate_prerequisites(args)
+  mod = driver.active_module
+  unless mod
+    print_error("No active module. Use 'use <module>' first.")
+    return [nil, nil, nil]
+  end
+
+  env = vulnerable_environment(mod)
+  unless env
+    print_error("Module does not define a vulnerable environment configuration.")
+    return [nil, nil, nil]
+  end
+
+  options = parse_build_args(args)
+  [mod, env, options]
+end
+
+# Steps 4-7: Resolve environment definition and validate port mappings.
+# Returns [definition_name, variant, profile, config, port_mapping]
+# or [nil, nil, nil, nil, nil] when variant is missing.
+def build_resolve_environment(mod, env, options)
+  definition_name = env.definition
+  default_variant = env.default_variant
+  port_mapping    = env.port_mapping
+
+  variant = options['VARIANT'].to_s.empty? ? default_variant : options['VARIANT']
+  profile = options['PROFILE'].to_s.empty? ? env.profile : options['PROFILE']
+
+  unless variant
+    print_error("No variant specified and module has no default_variant.")
+    return [nil, nil, nil, nil, nil]
+  end
+
+  loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+  config = loader.resolve(definition_name, variant, profile, env.overrides)
+
+  # Validate: every port in module's port_mapping must exist in the environment's exposed ports
+  resolved_ports = config.fetch('ports', {}).values.map(&:to_i)
+  port_mapping.keys.each do |container_port|
+    port_int = container_port.to_i
+    unless resolved_ports.include?(port_int)
+      available = resolved_ports.join(', ')
+      raise "Port mapping mismatch: module maps port #{port_int} but environment '#{definition_name}' (variant '#{variant}', profile '#{profile}') only exposes ports: #{available}"
+    end
+  end
+
+  print_status("Resolving environment for #{mod.fullname}...")
+  print_status("Definition: #{definition_name} | Variant: #{variant} | Profile: #{profile}")
+  print_status("Image: #{config['image']}")
+
+  [definition_name, variant, profile, config, port_mapping]
+end
+
+# Step 8: Pull the container image. Returns true on success, false on failure.
+def build_pull_image(runtime, config)
+  print_status("Pulling image #{config['image']}...")
+  unless runtime.pull(config['image'])
+    print_error("Failed to pull image: #{config['image']}")
+    return false
+  end
+  print_good("Image pulled successfully.")
+  true
+end
+
+# Step 9: Allocate free host ports for container bindings.
+def build_allocate_ports(runtime, port_mapping, options)
+  allocator = PortAllocator.new(runtime, self.class.registry.used_ports)
+  allocated_ports = {}
+  user_rport = options['RPORT'] ? options['RPORT'].to_i : nil
+  target_container_port = user_rport ? port_mapping.key('RPORT') : nil
+
+  port_mapping.each do |container_port, ds_option|
+    preferred = (container_port == target_container_port) ? user_rport : nil
+    host_port = allocator.allocate(preferred)
+
+    if preferred && host_port != preferred
+      print_status("Requested port #{preferred} unavailable. Using dynamically allocated port #{host_port}.")
+    end
+
+    allocated_ports[container_port] = host_port
+  end
+
+  allocated_ports
+end
+
+# Steps 10-12: Prune registry, build labels, map ports for runtime, and prepare volumes.
+# Returns [labels, run_ports, volumes, temp_dirs, env_id].
+def build_prepare_resources(runtime, config, definition_name, variant, mod, allocated_ports)
+  self.class.registry.prune(runtime)
+
+  instance_id = "msf-#{Socket.gethostname}-#{Process.pid}"
+  env_id = self.class.registry.reserve_id
+
+  labels = runtime.build_labels(
+    instance_id: instance_id,
+    module_fullname: mod.fullname,
+    env_id: env_id,
+    version: variant,
+    ports: allocated_ports
+  )
+
+  run_ports = {}
+  allocated_ports.each do |container_port, host_port|
+    run_ports[container_port] = host_port
+  end
+
+  volumes = {}
+  temp_dirs = []
+
+  if config['volumes']
+    config['volumes'].each do |name, vol_cfg|
+      host_path = vol_cfg['host_path']
+      unless host_path
+        host_path = Dir.mktmpdir("test_env_#{name}_")
+        temp_dirs << host_path
+      end
+      volumes[host_path] = vol_cfg['container_path']
+    end
+  end
+
+  [labels, run_ports, volumes, temp_dirs, env_id]
+end
+
+# Step 13: Launch the container. Returns the container_id.
+def build_launch_container(runtime, config, run_ports, labels, volumes, definition_name, variant)
+  print_status("Starting container...")
+  container_name = "msf-vulnenv-#{definition_name}-#{variant}-#{Time.now.to_f.to_s.delete('.')}"
+
+  runtime.run(
+    image: config['image'],
+    ports: run_ports,
+    labels: labels,
+    volumes: volumes,
+    name: container_name
+  )
+end
+
+# Step 14: Wait for health check. Returns true if healthy, false otherwise
+# (container is already cleaned up on failure).
+def build_wait_for_health(runtime, container_id, config, port_mapping, allocated_ports)
+  primary_container_port = port_mapping.key('RPORT')
+  health_host_port = allocated_ports[primary_container_port] || allocated_ports.values.first
+
+  health = config['health_check']
+  begin
+    HealthManager.new(runtime, container_id, health, health_host_port, self).wait
+  rescue => e
+    print_error("Health check failed: #{e.message}")
+    begin
+      runtime.stop(container_id) rescue nil
+      runtime.remove(container_id) rescue nil
+    rescue => cleanup_err
+      elog("Failed to cleanup unhealthy container: #{cleanup_err.message}")
+    end
+    return false
+  end
+  true
+end
+
+# Steps 15-16: Build datastore, register with registry.
+# Returns the constructed datastore hash.
+def build_register_environment(runtime, container_id, mod, variant, config, allocated_ports, port_mapping, temp_dirs, env_id)
+  datastore = { 'RHOSTS' => '127.0.0.1' }
+  allocated_ports.each do |container_port, host_port|
+    ds_option = port_mapping[container_port]
+    datastore[ds_option] = host_port if ds_option
+  end
+
+  if config['datastore_defaults']
+    config['datastore_defaults'].each do |key, value|
+      datastore[key] = value unless datastore.key?(key)
+    end
+  end
+
+  self.class.registry.register_with_id(
+    env_id: env_id,
+    container_id: container_id,
+    module_fullname: mod.fullname,
+    env_version: variant,
+    runtime: runtime.name,
+    image_ref: config['image'],
+    datastore: datastore,
+    allocated_ports: allocated_ports,
+    temp_dirs: temp_dirs
+  )
+
+  datastore
+end
+
+# Step 18: Display build results and suggested exploit command.
+def build_display_results(env_id, config, datastore)
+  print_good("Environment ready.")
+  print_status("Environment ID: #{env_id}")
+  datastore.each do |key, value|
+    print_status("   #{key.ljust(12)} => #{value}")
+  end
+
+  if config['credentials'] && config['credentials']['default']
+    creds = config['credentials']['default']
+    print_status("   #{'USERNAME'.ljust(12)} => #{creds['username']}")
+    print_status("   #{'PASSWORD'.ljust(12)} => #{creds['password']}")
+  end
+
+  env = self.class.registry.get(env_id)
+  print_status("Suggested: #{env.exploit_command}")
+end
       def cmd_test_env_help
         print_line("Usage: test_env <command>")
         print_line
