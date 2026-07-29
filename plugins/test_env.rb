@@ -965,9 +965,10 @@ module Msf
         return unless runtime
 
         # PRUNE: remove registry entries for containers that no longer exist
-        alive_ids = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' }).map { |c| c['ID'] }
+        alive_ids = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' }).map { |c| normalize_container_id(c['ID'] || c['Id']) }
+        @vuln_env = @store.load
         @vuln_env.targets.each do |target|
-          unless alive_ids.any? { |id| target.container_id == id }
+          unless alive_ids.include?(target.container_id)
             @vuln_env.remove_target(target.local_id)
           end
         end
@@ -984,10 +985,11 @@ module Msf
 
         containers.each do |container|
           labels = container.dig('Config', 'Labels') || container['Labels'] || {}
+          container_id = normalize_container_id(container['ID'] || container['Id'])
 
           # Identify by container_id, NOT by env_id label (labels are immutable
           # and become stale after ID compaction)
-          next if @vuln_env.find_by_container(container['ID'])
+          next if @vuln_env.find_by_container(container_id)
 
           module_fullname = labels['msf.vulnenv.module']
           version = labels['msf.vulnenv.version']
@@ -1024,7 +1026,7 @@ module Msf
           assigned_id = @vuln_env.next_id
           target = VulnTarget.new(
             local_id: assigned_id,
-            container_id: container['ID'],
+            container_id: container_id,
             module_fullname: module_fullname,
             env_version: version,
             runtime: runtime.name,
