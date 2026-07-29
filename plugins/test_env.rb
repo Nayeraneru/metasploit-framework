@@ -1686,6 +1686,15 @@ def build_register_environment(runtime, container_id, mod, variant, config, allo
     end
   end
 
+  # Merge credentials into datastore so they are applied to the module,
+  # stored in the registry, and included in the suggested exploit command.
+  if config['credentials'] && config['credentials']['default']
+    config['credentials']['default'].each do |key, value|
+      ds_key = key.to_s.upcase
+      datastore[ds_key] = value unless datastore.key?(ds_key)
+    end
+  end
+
   self.class.registry.register_with_id(
     env_id: env_id,
     container_id: container_id,
@@ -1709,11 +1718,6 @@ def build_display_results(env_id, config, datastore)
     print_status("   #{key.ljust(12)} => #{value}")
   end
 
-  if config['credentials'] && config['credentials']['default']
-    creds = config['credentials']['default']
-    print_status("   #{'USERNAME'.ljust(12)} => #{creds['username']}")
-    print_status("   #{'PASSWORD'.ljust(12)} => #{creds['password']}")
-  end
 
   env = self.class.registry.get(env_id)
   print_status("Suggested: #{env.exploit_command}")
