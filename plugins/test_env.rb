@@ -10,6 +10,7 @@ require 'socket'
 require 'fileutils'
 require 'timeout'   
 require 'net/http'
+require 'rex/text/table'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -1789,7 +1790,6 @@ end
           return
         end
 
-        # Build rows first so fallback mode can reuse them
         rows = targets.map do |t|
           [
             t.local_id.to_s,
@@ -1802,28 +1802,14 @@ end
           ]
         end
 
-        begin
-          tbl = Rex::Ui::Text::Table.new(
-            'Header'     => 'Test Environments',
-            'Indent'     => 1,
-            'Columns'    => ['ID', 'Container', 'Module', 'RHOST', 'RPORT', 'Status', 'Version']
-          )
+        tbl = Rex::Text::Table.new(
+          'Header'     => 'Test Environments',
+          'Indent'     => 1,
+          'Columns'    => ['ID', 'Container', 'Module', 'RHOST', 'RPORT', 'Status', 'Version']
+        )
 
-          rows.each { |r| tbl << r }
-          print_line(tbl.to_s)
-        rescue NameError
-          # Rex::Ui::Text::Table not yet loaded in this msfconsole context
-          print_status("Test Environments")
-          print_status("=" * 100)
-          print_status(
-            ['ID', 'Container', 'Module', 'RHOST', 'RPORT', 'Status', 'Version']
-              .map { |h| h.ljust(12) }.join
-          )
-          print_status("-" * 100)
-          rows.each do |r|
-            print_status(r.map { |cell| cell.to_s.ljust(12) }.join)
-          end
-        end
+        rows.each { |r| tbl << r }
+        print_line(tbl.to_s)
 
         print_status("#{targets.length} environment(s) tracked.")
       end
@@ -2071,43 +2057,16 @@ end
           return
         end
 
-        # Try formatted table output first; fall back to plain text if
-        # Rex::Ui::Text::Table isn't loaded yet (common in -q mode).
-        begin
-          tbl = Rex::Ui::Text::Table.new(
-            'Header' => 'Modules with test_env Support',
-            'Columns' => ['Module', 'Definition', 'Variant', 'Profile', 'Ports', 'Image']
-          )
+        tbl = Rex::Text::Table.new(
+          'Header' => 'Modules with test_env Support',
+          'Columns' => ['Module', 'Definition', 'Variant', 'Profile', 'Ports', 'Image']
+        )
 
-          matches.sort_by { |m| m[:fullname] }.each do |m|
-            tbl << [m[:fullname], m[:definition], m[:variant], m[:profile], m[:ports], m[:image]]
-          end
-
-          print_line(tbl.to_s)
-        rescue NameError
-          print_status("Modules with test_env Support")
-          print_status("=" * 110)
-          print_status(
-            "Module".ljust(50) +
-            "Definition".ljust(12) +
-            "Variant".ljust(10) +
-            "Profile".ljust(10) +
-            "Ports".ljust(12) +
-            "Image"
-          )
-          print_status("-" * 110)
-
-          matches.sort_by { |m| m[:fullname] }.each do |m|
-            print_status(
-              m[:fullname].ljust(50) +
-              m[:definition].ljust(12) +
-              m[:variant].ljust(10) +
-              m[:profile].ljust(10) +
-              m[:ports].ljust(12) +
-              m[:image]
-            )
-          end
+        matches.sort_by { |m| m[:fullname] }.each do |m|
+          tbl << [m[:fullname], m[:definition], m[:variant], m[:profile], m[:ports], m[:image]]
         end
+
+        print_line(tbl.to_s)
 
         print_status("Found #{matches.length} module(s) with test_env support (scanned #{scanned} total).")
       end
