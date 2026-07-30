@@ -1180,13 +1180,19 @@ module Msf
         response = http.request(request)
 
         actual_status = response.code.to_i
-        if actual_status == expected_status
-          true
-        else
+        unless actual_status == expected_status
           # Diagnostic output: tell the user what actually came back
           print_status("  Health check returned #{actual_status}, expected #{expected_status}")
-          false
+          return false
         end
+
+        expected_match = @config['match']
+        if expected_match && !response.body.to_s.include?(expected_match)
+          print_status("  Health check got status #{actual_status} but response did not contain expected content")
+          return false
+        end
+
+        true
       rescue Errno::ECONNRESET
         # TCP connection accepted but HTTP server not yet initialized.
         # This is a transient "not ready" signal — retry on next attempt.
@@ -1224,6 +1230,98 @@ module Msf
           output.include?(expected_output)
         else
           true
+        end
+      end
+    end
+
+    # =====================================================================
+    # Provisioner
+    # =====================================================================
+    # Runs a one-time setup action against a container after it passes its
+    # health check, but before the environment is considered ready. Needed
+    # for images (like vulnerable WordPress) that boot with an unconfigured
+    # app: the process is up and answering HTTP, but there's no database
+    # schema or admin account yet, so nothing is actually exploitable until
+    # this runs.
+    class Provisioner
+      def initialize(runtime, container_id, provision_config, host_port, dispatcher = nil)
+        @runtime = runtime
+        @container_id = container_id
+        @config = provision_config || {}
+        @host_port = host_port
+        @dispatcher = dispatcher
+      end
+
+      # Returns true if there's nothing to do, or if provisioning succeeds.
+      # Returns false (does not raise) on failure so the caller decides
+      # whether that's fatal.
+      def run(datastore = {})
+        return true if @config.empty?
+
+        type = @config['type']
+        unless type == 'http_post'
+          raise "Unknown provision type: #{type.inspect}"
+        end
+
+        print_status("Provisioning environment...")
+
+        Timeout.timeout(@config['timeout'] || 10) do
+          post_http(datastore)
+        end
+
+        print_good("Provisioning request sent.")
+        true
+      rescue => e
+        print_error("Provisioning failed: #{e.class} - #{e.message}")
+        false
+      end
+
+      def print_status(msg)
+        @dispatcher&.print_status(msg)
+      end
+
+      def print_good(msg)
+        @dispatcher&.print_good(msg)
+      end
+
+      def print_error(msg)
+        @dispatcher&.print_error(msg)
+      end
+
+      private
+
+      def post_http(datastore)
+        path = @config['path'] || '/'
+        uri = URI("http://127.0.0.1:#{@host_port}#{path}")
+
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.open_timeout = 5
+        http.read_timeout = 10
+
+        request = Net::HTTP::Post.new(uri)
+        body = resolve_template(@config['body'] || {}, datastore)
+        request.set_form_data(body)
+
+        response = http.request(request)
+
+        unless response.code.to_i.between?(200, 399)
+          raise "provision request to #{path} returned #{response.code}"
+        end
+      end
+
+      # Resolves "{{ credentials.default.username }}"-style tokens in the
+      # provision body against the datastore already built for this
+      # environment (USERNAME/PASSWORD etc. are merged in from
+      # config['credentials']['default'] before this runs).
+      def resolve_template(body, datastore)
+        body.each_with_object({}) do |(key, value), out|
+          out[key] = value.is_a?(String) ? substitute(value, datastore) : value
+        end
+      end
+
+      def substitute(str, datastore)
+        str.gsub(/\{\{\s*credentials\.default\.(\w+)\s*\}\}/) do
+          datastore[Regexp.last_match(1).upcase].to_s
         end
       end
     end
@@ -1475,9 +1573,21 @@ def cmd_test_env_build(args)
     # Step 14: health check BEFORE registering
     return unless build_wait_for_health(runtime, container_id, config, port_mapping, allocated_ports)
 
-    # Steps 15-16: register environment in registry
-    datastore = build_register_environment(
-      runtime, container_id, mod, variant, config, allocated_ports, port_mapping, temp_dirs, env_id
+    # Step 15: build the datastore (RHOSTS/RPORT/credentials/etc.)
+    datastore = build_construct_datastore(config, allocated_ports, port_mapping)
+
+    # Step 15.5: run optional one-time provisioning (e.g. WordPress install
+    # wizard), then re-verify, before the environment is registered as ready
+    unless build_provision_environment(runtime, container_id, config, port_mapping, allocated_ports, datastore)
+      print_error("Provisioning failed; tearing down container.")
+      runtime.stop(container_id) rescue nil
+      runtime.remove(container_id) rescue nil
+      return
+    end
+
+    # Step 16: register environment in registry
+    build_register_environment(
+      runtime, container_id, mod, variant, config, allocated_ports, temp_dirs, env_id, datastore
     )
     registered = true
 
@@ -1674,9 +1784,10 @@ def build_wait_for_health(runtime, container_id, config, port_mapping, allocated
   true
 end
 
-# Steps 15-16: Build datastore, register with registry.
-# Returns the constructed datastore hash.
-def build_register_environment(runtime, container_id, mod, variant, config, allocated_ports, port_mapping, temp_dirs, env_id)
+# Step 15: Build the datastore hash (RHOSTS/RPORT/TARGETURI/credentials/etc.)
+# Split out from registration so provisioning (below) has USERNAME/PASSWORD
+# and the resolved ports available before the environment is registered.
+def build_construct_datastore(config, allocated_ports, port_mapping)
   datastore = { 'RHOSTS' => '127.0.0.1' }
   allocated_ports.each do |container_port, host_port|
     ds_option = port_mapping[container_port]
@@ -1698,6 +1809,39 @@ def build_register_environment(runtime, container_id, mod, variant, config, allo
     end
   end
 
+  datastore
+end
+
+# Step 15.5: Run the optional one-time provisioning step (e.g. driving the
+# WordPress install wizard) against the primary port, then re-verify with
+# an optional 'verify' block. No-op (returns true) if the definition has no
+# 'provision' config. On failure, the caller is responsible for cleanup.
+def build_provision_environment(runtime, container_id, config, port_mapping, allocated_ports, datastore)
+  provision = config['provision']
+  return true unless provision.is_a?(Hash) && !provision.empty?
+
+  primary_container_port = port_mapping.key('RPORT')
+  host_port = allocated_ports[primary_container_port] || allocated_ports.values.first
+
+  unless Provisioner.new(runtime, container_id, provision, host_port, self).run(datastore)
+    return false
+  end
+
+  verify = config['verify']
+  return true unless verify.is_a?(Hash) && !verify.empty?
+
+  begin
+    HealthManager.new(runtime, container_id, verify, host_port, self).wait
+  rescue => e
+    print_error("Post-provision verification failed: #{e.message}")
+    return false
+  end
+
+  true
+end
+
+# Step 16: Register the built, provisioned environment with the registry.
+def build_register_environment(runtime, container_id, mod, variant, config, allocated_ports, temp_dirs, env_id, datastore)
   self.class.registry.register_with_id(
     env_id: env_id,
     container_id: container_id,
