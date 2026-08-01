@@ -256,7 +256,6 @@ shared:
     exploit:
       payload: java/meterpreter/reverse_tcp
       options:
-        LHOST: 127.0.0.1
         LPORT: 4444
     validation:
       expected_session: true
@@ -264,6 +263,7 @@ shared:
       expected_output: "uid="
       timeout: 120
 ```
+**NOTE:** LHOST is deliberately NOT set here. The target runs inside a container network namespace, so a hardcoded 127.0.0.1 resolves to the container itself, not the host - the payload can never call back. Metasploit's own outbound-interface auto-detection (used when LHOST is left unset) correctly picks the host's real reachable IP, which is what actually works.
 
 ### profiles Section
 

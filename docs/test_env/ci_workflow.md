@@ -226,9 +226,8 @@ Environment definitions include a `ci` section so the automation knows what payl
 # data/vuln_envs/activemq.yml
 ci:
   exploit:
-    payload: java/meterpreter/reverse_tcp
+    payload: cmd/linux/http/x64/meterpreter/reverse_tcp
     options:
-      LHOST: 127.0.0.1
       LPORT: 4444
   validation:
     expected_session: true
