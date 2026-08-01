@@ -23,7 +23,7 @@ Ports: {"http"=>8080}
 Health check type: http
 ```
 
-## Directory Structure
+## Directory Structure Example
 
 ```
 data/
@@ -71,6 +71,7 @@ This gives maximum reusability while allowing precise per-module customization.
 | Different health check endpoint or expected status | **Module override** | Same profile, module overrides `health_check.path` |
 | Different datastore default | **Module override** | Same profile, module overrides `datastore_defaults.TARGETURI` |
 | Different credentials | **Module override** | Same profile, module overrides `credentials.default` |
+| Service boots unconfigured and needs one-time setup before it's exploitable | **`shared.provision` (+ `verify`)** | WordPress image with no DB schema/admin account until the install wizard is submitted |
 
 ## Schema
 
@@ -149,6 +150,7 @@ shared:
 | `type` | String | Yes | `http`, `tcp`, or `command` |
 | `path` | String | If type=http | HTTP path to check |
 | `expected_status` | Integer | No | Default: 200 |
+| `match` | String | No | If type=http. Substring the response body must contain. Only checked once `expected_status` matches; use to distinguish "server responding" from "app actually ready" (e.g. an install wizard and a working login page can both return the same status) |
 | `command` | String | If type=command | Command to execute |
 | `expected_output` | String | If type=command | Substring to match |
 | `interval` | Integer | No | Seconds between checks. Default: 5 |
@@ -170,6 +172,73 @@ shared:
   datastore_defaults:
     TARGETURI: /script
 ```
+
+#### provision (Optional)
+
+Some images boot with the target process running but the application itself
+not yet usable — e.g. a fresh WordPress container serves HTTP but has no
+database schema or admin account until the install wizard is submitted.
+`provision` describes a one-time setup action to run after `health_check`
+passes and before the environment is registered as ready.
+
+```yaml
+shared:
+  provision:
+    type: http_post
+    path: /wp-admin/install.php?step=2
+    body:
+      weblog_title: "Vulnerable WP"
+      user_name: "{{ credentials.default.username }}"
+      admin_password: "{{ credentials.default.password }}"
+      admin_password2: "{{ credentials.default.password }}"
+      admin_email: "admin@example.com"
+      blog_public: 0
+      Submit: "Install WordPress"
+    timeout: 10
+```
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `type` | String | Yes | Currently only `http_post` is supported |
+| `path` | String | Yes | Request path, sent to the primary mapped port (the container port mapped to `RPORT` in `port_mapping`) |
+| `body` | Hash | No | Form fields, sent as `application/x-www-form-urlencoded`. Values may reference `{{ credentials.default.<key> }}`, which is resolved against the built datastore (e.g. `USERNAME`/`PASSWORD`) |
+| `timeout` | Integer | No | Seconds to wait for the request. Default: 10 |
+
+A response status in the `200`–`399` range is treated as success. Anything
+else (including a request error or timeout) fails the build; the container
+is stopped and removed, matching the existing cleanup behavior for a failed
+health check.
+
+**Architectural decisions:** single stateless request only — no multi-step
+flows (e.g. a form load to fetch a CSRF token before the real submit), no
+session/cookie carryover between requests, and no non-HTTP provisioning
+(e.g. running a setup command inside the container via `runtime.exec`, the
+way `health_check`'s `command` type does). Extend `type` as new provisioning
+shapes come up rather than building these speculatively.
+
+#### verify (Optional)
+
+Re-checks the environment after `provision` runs, confirming the setup
+action actually took effect rather than just assuming success from the
+HTTP status code. Uses the same shape and checker as `health_check`
+(including the `match` field above), so it's commonly used to look for
+content that only appears once setup is complete.
+
+```yaml
+shared:
+  verify:
+    type: http
+    path: /wp-login.php
+    expected_status: 200
+    match: "user_login"
+    interval: 3
+    timeout: 2
+    retries: 10
+```
+
+If `provision` is not defined, `verify` is ignored. If `provision` is
+defined but `verify` is not, the environment is registered as ready as
+soon as `provision` returns a `200`–`399` response, with no further check.
 
 #### volumes (Optional)
 ```yaml
@@ -254,6 +323,12 @@ When `test_env build` resolves an environment definition, the loader performs a 
 5. Deep-merge the selected profile's configuration into it.
 6. Deep-merge the module's `VulnerableEnvironment['overrides']` (if any).
 7. Attach the variant-specific `image`, `version`, and `build_args` from the matching variant in the `variants` list.
+
+If the resolved config includes `provision`, it runs once the container
+passes `health_check` and before the environment is registered. If
+`verify` is also present, it runs immediately after `provision` succeeds.
+A failure at either step aborts the build and tears down the container,
+the same as a failed `health_check`.
 
 ### Error Cases
 
