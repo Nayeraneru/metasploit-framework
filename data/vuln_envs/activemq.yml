@@ -33,7 +33,11 @@ shared:
 
   ci:
     exploit:
-      payload: java/meterpreter/reverse_tcp
+      # The module's own auto-default (cmd/linux/ftp/x64/meterpreter/reverse_tcp)
+      # does not work: FTP isn't one of Metasploit's supported fetch-payload
+      # server protocols (only HTTP, HTTPS, SMB, TFTP), so it fails with
+      # "bad-config: Unsupported Binary Selected" every time. http works.
+      payload: cmd/linux/http/x64/meterpreter/reverse_tcp
       options:
         LHOST: 127.0.0.1
         LPORT: 4444

@@ -1675,6 +1675,16 @@ def build_resolve_environment(mod, env, options)
   print_status("Definition: #{definition_name} | Variant: #{variant} | Profile: #{profile}")
   print_status("Image: #{config['image']}")
 
+  # If the environment definition names a recommended payload (e.g. because
+  # the module's own auto-selected default is known not to work against
+  # this specific image/variant), apply it now, before the container is
+  # even started, so it's reflected if the user runs 'show options'.
+  recommended_payload = config.dig('ci', 'exploit', 'payload')
+  if recommended_payload && mod.datastore['PAYLOAD'] != recommended_payload
+    print_status("Setting recommended payload for this environment: #{recommended_payload}")
+    mod.datastore['PAYLOAD'] = recommended_payload
+  end
+
   [definition_name, variant, profile, config, port_mapping]
 end
 

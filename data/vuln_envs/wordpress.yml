@@ -63,7 +63,7 @@ shared:
 
   ci:
     exploit:
-      payload: php/meterpreter/reverse_tcp
+      payload: php/reverse_php
       options:
         LHOST: 127.0.0.1
         LPORT: 4444
