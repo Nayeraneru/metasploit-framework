@@ -39,7 +39,6 @@ shared:
       # "bad-config: Unsupported Binary Selected" every time. http works.
       payload: cmd/linux/http/x64/meterpreter/reverse_tcp
       options:
-        #LHOST: 127.0.0.1
         LPORT: 4444
     validation:
       expected_session: true
