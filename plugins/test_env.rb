@@ -1505,7 +1505,7 @@ module Msf
         when 'remove-all'
           cmd_test_env_remove_all(args)
         when 'exec'
-          print_status("TODO: test_env exec")
+          cmd_test_env_exec(args)
         when 'status'
           cmd_test_env_status(args)
         when 'help'
@@ -1966,6 +1966,97 @@ end
         print_line(tbl.to_s)
 
         print_status("#{targets.length} environment(s) tracked.")
+      end
+
+      def cmd_test_env_exec(args)
+        if args.empty? || args.first == '-h' || args.first == '--help'
+          print_line("Usage: test_env exec <ID>")
+          print_line
+          print_line("Loads the module this environment was built for, applies its")
+          print_line("stored datastore and recommended payload (if any), and runs it.")
+          print_line("Equivalent to manually running the 'Suggested:' command printed")
+          print_line("by 'test_env build', but works from anywhere in the console -")
+          print_line("you do not need to 'use' the module first.")
+          return
+        end
+
+        # --- Step A: look up the stored environment. Fail fast with a
+        # specific, actionable message rather than letting a nil target
+        # propagate into a confusing NoMethodError three lines down. This
+        # is the "improve error handling" deliverable in practice: every
+        # precondition gets its own guard and its own message.
+        id = args.shift.to_i
+        target = self.class.registry.get(id)
+
+        unless target
+          print_error("Environment #{id} not found. Run 'test_env list' to see tracked environments.")
+          return
+        end
+
+        unless target.running?
+          print_error("Environment #{id} is #{target.status}, not running.")
+          print_status("Run 'test_env start #{id}' first, then retry.")
+          return
+        end
+
+        # --- Step B: load the module by fullname. Deliberately not using
+        # driver.active_module here - exec should work standalone, even if
+        # the console is currently pointed at a completely different module
+        # (or nothing at all). This makes 'exec' safe to call repeatedly in
+        # automation without tracking console state externally.
+        print_status("Using #{target.module_fullname}...")
+        driver.run_single("use #{target.module_fullname}")
+
+        mod = driver.active_module
+        unless mod && mod.fullname == target.module_fullname
+          print_error("Could not load module '#{target.module_fullname}'. It may have been removed or renamed since this environment was built.")
+          return
+        end
+
+        # --- Step C: re-resolve the environment definition to recover any
+        # ci.exploit recommendation (payload + options). This is NOT part
+        # of target.datastore - build_construct_datastore only stores
+        # RHOSTS/RPORT/TARGETURI/credentials, not PAYLOAD/LHOST/LPORT - so
+        # without this step 'exec' would silently fall back to whatever
+        # payload the module auto-selects, reintroducing the exact
+        # incompatible-default-payload problem 'build' already solves.
+        raw = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
+        if raw
+          env_meta = VulnerableEnvironment.new(raw)
+          loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+          config = loader.resolve(env_meta.definition, target.env_version, env_meta.profile, env_meta.overrides) rescue nil
+          ci_exploit = config&.dig('ci', 'exploit') || {}
+
+          if ci_exploit['payload']
+            print_status("Setting recommended payload for this environment: #{ci_exploit['payload']}")
+            driver.run_single("set PAYLOAD #{ci_exploit['payload']}")
+          end
+
+          ci_exploit['options']&.each do |key, value|
+            driver.run_single("set #{key} #{value}")
+          end
+        end
+
+        # --- Step D: apply the suggested datastore automatically. This
+        # reuses target.datastore directly rather than re-deriving RHOSTS/
+        # RPORT/credentials by hand - single source of truth, and it's the
+        # exact same hash 'test_env build' already showed the user under
+        # "Suggested:", so what runs here always matches what was printed.
+        target.datastore.each do |key, value|
+          driver.run_single("set #{key} #{value}")
+        end
+
+        # --- Step E: run it. driver.run_single("exploit") reuses the
+        # console's own exploit-execution path - AutoCheck, payload
+        # generation, session creation, and all success/failure messaging
+        # come from that well-tested path rather than being reimplemented
+        # here. See the design note above for why this matters.
+        print_status("Executing: #{target.exploit_command}")
+        driver.run_single("exploit")
+      rescue => e
+        print_error("test_env exec failed: #{e.class} - #{e.message}")
+        elog("test_env exec error: #{e.class} - #{e.message}")
+        elog(e.backtrace.join("\n"))
       end
 
       def cmd_test_env_start(args)

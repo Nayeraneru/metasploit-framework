@@ -63,13 +63,19 @@ shared:
 
   ci:
     exploit:
+      # php/meterpreter/reverse_tcp does not work against this image:
+      # it has no PHP openssl extension (confirmed via
+      # `docker exec <container> php -m | grep -i openssl` returning
+      # nothing), so Meterpreter can never negotiate TLV encryption
+      # and the session gets closed as invalid immediately after
+      # opening. Plain shell sidesteps encryption negotiation entirely.
       payload: php/reverse_php
       options:
-        LHOST: 127.0.0.1
+        #LHOST: 127.0.0.1
         LPORT: 4444
     validation:
       expected_session: true
-      session_type: meterpreter
+      session_type: shell
       expected_output: "uid="
       timeout: 120
 
