@@ -1980,11 +1980,11 @@ end
           return
         end
 
-        # Step A: look up the stored environment. Fail fast with a
+        # --- Step A: look up the stored environment. Fail fast with a
         # specific, actionable message rather than letting a nil target
-        # propagate into a confusing NoMethodError three lines down. T=this
+        # propagate into a confusing NoMethodError three lines down. This
         # is the "improve error handling" deliverable in practice: every
-        # precondition gets its own guard and its own message
+        # precondition gets its own guard and its own message.
         id = args.shift.to_i
         target = self.class.registry.get(id)
 
@@ -1999,11 +1999,11 @@ end
           return
         end
 
-        # Step B: load the module by fullname. Deliberately not using
+        # --- Step B: load the module by fullname. Deliberately not using
         # driver.active_module here - exec should work standalone, even if
         # the console is currently pointed at a completely different module
-        # (or nothing at all). this makes 'exec' safe to call repeatedly in
-        # automation without tracking console state externally
+        # (or nothing at all). This makes 'exec' safe to call repeatedly in
+        # automation without tracking console state externally.
         print_status("Using #{target.module_fullname}...")
         driver.run_single("use #{target.module_fullname}")
 
@@ -2013,13 +2013,13 @@ end
           return
         end
 
-        # Step C: re-resolve the environment definition to recover any
+        # --- Step C: re-resolve the environment definition to recover any
         # ci.exploit recommendation (payload + options). This is NOT part
         # of target.datastore - build_construct_datastore only stores
         # RHOSTS/RPORT/TARGETURI/credentials, not PAYLOAD/LHOST/LPORT - so
         # without this step 'exec' would silently fall back to whatever
         # payload the module auto-selects, reintroducing the exact
-        # incompatible-default-payload problem 'build' already solves
+        # incompatible-default-payload problem 'build' already solves.
         raw = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
         if raw
           env_meta = VulnerableEnvironment.new(raw)
@@ -2037,26 +2037,50 @@ end
           end
         end
 
-        # Step D: apply the suggested datastore automatically. This
+        # --- Step D: apply the suggested datastore automatically. This
         # reuses target.datastore directly rather than re-deriving RHOSTS/
         # RPORT/credentials by hand - single source of truth, and it's the
         # exact same hash 'test_env build' already showed the user under
-        # "Suggested:", so what runs here always matches what was printed
+        # "Suggested:", so what runs here always matches what was printed.
         target.datastore.each do |key, value|
           driver.run_single("set #{key} #{value}")
         end
 
-        # Step E: run it. driver.run_single("exploit") reuses the
+        # --- Step D.5: avoid Rex::BindFailed from stale listeners on
+        # repeated runs. Some payloads (e.g. cmd/linux/http/.../reverse_tcp)
+        # bind a local server on this host to serve the stage/fetch content
+        # - by default on a fixed port (often 8080). If a previous 'exec'
+        # run's server didn't get torn down cleanly, that port stays bound
+        # and every subsequent run fails until someone manually finds and
+        # kills the stale process. Picking a fresh free port each time
+        # removes the collision entirely rather than requiring cleanup.
+        %w[SRVPORT FETCH_SRVPORT].each do |opt|
+          free_port = free_local_port
+          driver.run_single("set #{opt} #{free_port}")
+        end
+
+        # --- Step E: run it. driver.run_single("exploit") reuses the
         # console's own exploit-execution path - AutoCheck, payload
         # generation, session creation, and all success/failure messaging
         # come from that well-tested path rather than being reimplemented
-        # here. See the design note above for why this matters
+        # here. See the design note above for why this matters.
         print_status("Executing: #{target.exploit_command}")
         driver.run_single("exploit")
       rescue => e
         print_error("test_env exec failed: #{e.class} - #{e.message}")
         elog("test_env exec error: #{e.class} - #{e.message}")
         elog(e.backtrace.join("\n"))
+      end
+
+      # Asks the OS for an unused ephemeral port by binding to port 0 and
+      # reading back what it was assigned. Simpler and more reliable than
+      # maintaining our own "is this port free" bookkeeping for host-side
+      # (non-container) ports - the OS already tracks this correctly.
+      def free_local_port
+        server = TCPServer.new('0.0.0.0', 0)
+        port = server.addr[1]
+        server.close
+        port
       end
 
       def cmd_test_env_start(args)
