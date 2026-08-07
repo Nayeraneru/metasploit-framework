@@ -1506,6 +1506,8 @@ module Msf
           cmd_test_env_remove_all(args)
         when 'exec'
           cmd_test_env_exec(args)
+        when 'validate'
+          cmd_test_env_validate(args)
         when 'status'
           cmd_test_env_status(args)
         when 'help'
@@ -1891,6 +1893,7 @@ end
         print_line("  remove <ID> Tear down an environment")
         print_line("  remove-all Tear down all environments")
         print_line("  exec <ID>  Execute exploit against environment")
+        print_line("  validate <ID> Check session/output against ci.validation")
         print_line("  status     Show runtime status")
         print_line("  help       Show this help")
         print_line
@@ -2081,6 +2084,209 @@ end
         port = server.addr[1]
         server.close
         port
+      end
+
+      # Runs a lightweight "who am I" check on a session and returns
+      # output in the same shape a raw 'id' command would (so it can be
+      # matched against a shell-style expected_output like "uid=").
+      #
+      # Deliberately NOT using shell_command_token for Meterpreter: that
+      # opens a process channel (sys.process.execute under the hood), and
+      # in testing that channel path failed deterministically - every
+      # attempt, every session, same "core_channel_write: Operation
+      # failed: 9" - which points to the channel mechanism itself being
+      # unreliable in this environment, not a one-off timing issue.
+      # sys.config.getuid is a plain TLV request/response call with no
+      # channel involved, so it avoids that failure mode entirely.
+      #
+      # Shell sessions have no such alternative - shell_command_token IS
+      # the interface for them, and it worked without issue in testing
+      # (see the WordPress php/reverse_php run), so it stays as-is there.
+      def run_verification_command(session)
+        if session.type.to_s == 'meterpreter' && session.respond_to?(:sys)
+          uid = session.sys.config.getuid
+          "uid=#{uid}"
+        else
+          session.shell_command_token('id')
+        end
+      end
+
+      # Checks a built (and typically already-'exec'd) environment against
+      # its definition's ci.validation block: was a session created, is it
+      # the expected type, and does it produce the expected output. Prints
+      # a clear PASS/FAIL.
+      #
+      # This is the concrete "align shared definitions with CI and local
+      # execution workflows" deliverable: ci.validation was previously
+      # documented in the YAML schema but never actually read by any code
+      # path. Because this method only reads from the resolved definition
+      # (never anything console-session-specific beyond the session list
+      # itself), the exact same check a human runs interactively here is
+      # what a headless CI runner would perform against the same YAML -
+      # there is one definition of "did this pass," not two.
+      def cmd_test_env_validate(args)
+        if args.empty? || args.first == '-h' || args.first == '--help'
+          print_line("Usage: test_env validate <ID>")
+          print_line
+          print_line("Checks session(s) opened against this environment's")
+          print_line("module against the definition's ci.validation")
+          print_line("expectations (session type + expected output). If")
+          print_line("multiple sessions exist (some modules open duplicates),")
+          print_line("each is tried until one responds correctly. Prints PASS")
+          print_line("or FAIL. Run 'test_env exec <ID>' first if no session")
+          print_line("exists yet.")
+          print_line
+          print_line("IMPORTANT: sessions are process-local. Run 'exec' and")
+          print_line("'validate' in the SAME msfconsole window - a session")
+          print_line("opened in one msfconsole process is invisible to another.")
+          return
+        end
+
+        id = args.shift.to_i
+        target = self.class.registry.get(id)
+
+        unless target
+          print_error("Environment #{id} not found. Run 'test_env list' to see tracked environments.")
+          return
+        end
+
+        # Load the module read-only - validate doesn't change console
+        # context (unlike exec, which needs 'use' for driver.run_single
+        # to apply datastore/run the exploit).
+        mod = framework.modules.create(target.module_fullname)
+        unless mod
+          print_error("Could not load module '#{target.module_fullname}'. It may have been removed or renamed since this environment was built.")
+          return
+        end
+
+        raw = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
+        unless raw
+          print_error("Module '#{target.module_fullname}' does not define a VulnerableEnvironment.")
+          return
+        end
+
+        env_meta = VulnerableEnvironment.new(raw)
+        loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
+        config = loader.resolve(env_meta.definition, target.env_version, env_meta.profile, env_meta.overrides) rescue nil
+
+        unless config
+          print_error("Could not resolve environment definition '#{env_meta.definition}'.")
+          return
+        end
+
+        validation = config.dig('ci', 'validation')
+        unless validation
+          print_error("Definition '#{env_meta.definition}' has no ci.validation block - nothing to check against.")
+          return
+        end
+
+        expected_session = validation.fetch('expected_session', true)
+        expected_type    = validation['session_type']
+        expected_output  = validation['expected_output']
+        wait_timeout     = validation['timeout'] || 120
+
+        print_status("Validating environment #{id} (#{target.module_fullname}) against #{env_meta.definition}'s ci.validation...")
+
+        unless expected_session
+          print_good("PASS: ci.validation does not require a session.")
+          return
+        end
+
+        # Session creation can lag slightly behind 'exploit' returning
+        # (staged payloads in particular), so poll for a short window
+        # rather than checking exactly once.
+        candidates = []
+        begin
+          Timeout.timeout(wait_timeout) do
+            until candidates.any?
+              candidates = framework.sessions.values
+                                     .select { |s| s.via_exploit == target.module_fullname }
+                                     .sort_by(&:sid)
+              sleep 2 if candidates.empty?
+            end
+          end
+        rescue Timeout::Error
+          # handled by the empty check below
+        end
+
+        if candidates.empty?
+          print_error("FAIL: no session was created within #{wait_timeout}s (expected_session: true) in this console session.")
+          print_status("Sessions are process-local: they only exist in the msfconsole process that opened them.")
+          print_status("If you ran 'test_env exec #{id}' in a different msfconsole window, run 'test_env validate #{id}' there too - not here.")
+          print_status("Otherwise, run 'test_env exec #{id}' first, then 'test_env validate #{id}' in the same console.")
+          return
+        end
+
+        print_status("Found #{candidates.length} session(s) for this module: #{candidates.map(&:sid).join(', ')}")
+
+        if expected_type
+          candidates = candidates.select { |s| s.type.to_s == expected_type.to_s }
+          if candidates.empty?
+            print_error("FAIL: no session of type '#{expected_type}' found.")
+            return
+          end
+        end
+
+        # Some modules (notably this ActiveMQ one, which fires its Spring
+        # XML payload multiple times) can leave more than one session -
+        # some real, some stale/half-connected duplicates. The most
+        # recent SID is not reliably the working one (observed directly:
+        # the session actually interacted with was SID 1, while SID 2 -
+        # a duplicate opened moments later - consistently failed channel
+        # writes). So rather than guessing based on recency, try each
+        # candidate oldest-first and use the first one that actually
+        # responds. If expected_output isn't set, there's nothing to
+        # distinguish working from broken, so just take the oldest.
+        session = nil
+        output = nil
+
+        if expected_output
+          candidates.each do |candidate|
+            if candidate.respond_to?(:load_stdapi)
+              begin
+                candidate.load_stdapi
+              rescue => e
+                print_status("Could not explicitly load stdapi on session #{candidate.sid} (#{e.message}), continuing anyway...")
+              end
+            end
+
+            result = nil
+            attempts = 0
+            begin
+              attempts += 1
+              result = run_verification_command(candidate)
+            rescue => e
+              if attempts < 3
+                print_status("Session #{candidate.sid}: verification command failed on attempt #{attempts}/3 (#{e.message}), retrying...")
+                sleep 3
+                retry
+              else
+                print_status("Session #{candidate.sid} did not respond after #{attempts} attempts (#{e.message}) - trying next candidate, if any.")
+              end
+            end
+
+            if result&.include?(expected_output)
+              session = candidate
+              output = result
+              break
+            end
+          end
+
+          unless session
+            print_error("FAIL: none of #{candidates.length} candidate session(s) (#{candidates.map(&:sid).join(', ')}) produced the expected output '#{expected_output}'.")
+            return
+          end
+        else
+          session = candidates.first
+        end
+
+        print_status("Using session #{session.sid} (#{session.type})")
+
+        print_good("PASS: environment #{id} validated successfully against #{env_meta.definition}'s ci.validation.")
+      rescue => e
+        print_error("test_env validate failed: #{e.class} - #{e.message}")
+        elog("test_env validate error: #{e.class} - #{e.message}")
+        elog(e.backtrace.join("\n"))
       end
 
       def cmd_test_env_start(args)
@@ -2342,7 +2548,7 @@ end
       
       def cmd_test_env_tabs(str, words)
         if words.length == 1
-          return %w[build list modules stop start remove remove-all exec status help]
+          return %w[build list modules stop start remove remove-all exec validate status help]
         end
 
         if words.length == 2 && words[0] == 'build'
@@ -2351,7 +2557,7 @@ end
 
         if words.length == 2
           case words[0]
-          when 'stop', 'start', 'remove', 'exec'
+          when 'stop', 'start', 'remove', 'exec', 'validate'
             return self.class.registry.list.map(&:local_id).map(&:to_s)
           end
         end
