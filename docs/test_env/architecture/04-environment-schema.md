@@ -23,7 +23,7 @@ Ports: {"http"=>8080}
 Health check type: http
 ```
 
-## Directory Structure
+## Directory Structure Example
 
 ```
 data/
@@ -209,7 +209,7 @@ else (including a request error or timeout) fails the build; the container
 is stopped and removed, matching the existing cleanup behavior for a failed
 health check.
 
-**Current limitations (v1):** single stateless request only — no multi-step
+**Architectural decisions:** single stateless request only — no multi-step
 flows (e.g. a form load to fetch a CSRF token before the real submit), no
 session/cookie carryover between requests, and no non-HTTP provisioning
 (e.g. running a setup command inside the container via `runtime.exec`, the
