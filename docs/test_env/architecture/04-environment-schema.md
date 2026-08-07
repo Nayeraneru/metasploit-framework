@@ -23,7 +23,7 @@ Ports: {"http"=>8080}
 Health check type: http
 ```
 
-## Directory Structure Example
+## Directory Structure
 
 ```
 data/
@@ -209,7 +209,7 @@ else (including a request error or timeout) fails the build; the container
 is stopped and removed, matching the existing cleanup behavior for a failed
 health check.
 
-**Architectural decisions:** single stateless request only — no multi-step
+**Current limitations (v1):** single stateless request only — no multi-step
 flows (e.g. a form load to fetch a CSRF token before the real submit), no
 session/cookie carryover between requests, and no non-HTTP provisioning
 (e.g. running a setup command inside the container via `runtime.exec`, the
@@ -263,7 +263,52 @@ shared:
       expected_output: "uid="
       timeout: 120
 ```
-**NOTE:** LHOST is deliberately NOT set here. The target runs inside a container network namespace, so a hardcoded 127.0.0.1 resolves to the container itself, not the host - the payload can never call back. Metasploit's own outbound-interface auto-detection (used when LHOST is left unset) correctly picks the host's real reachable IP, which is what actually works.
+
+**`ci.exploit`** — read and applied automatically by both `test_env build`
+and `test_env exec`. If `payload` is set and differs from the module's
+current `PAYLOAD`, it's applied via `set PAYLOAD ...` before the module
+runs (this is what lets a definition steer around a module's own default
+payload when that default is known not to work against the image).
+Any keys under `options` are applied the same way.
+
+Do not set `LHOST` here. The target runs inside a container network
+namespace; a hardcoded `LHOST` (especially `127.0.0.1`) resolves to the
+container itself, not the host, so the payload can never call back or be
+fetched. Leaving `LHOST` unset lets Metasploit's own outbound-interface
+auto-detection supply the host's real reachable address, which is what
+actually works from inside a container.
+
+| Key | Type | Required | Description |
+|-----|------|----------|--------------|
+| `payload` | String | No | Payload to select for this environment, if the module's default is unsuitable |
+| `options` | Hash | No | Additional datastore keys to set (e.g. `LPORT`). Do not include `LHOST` |
+
+**`ci.validation`** — read and checked by `test_env validate <ID>`, run
+after `test_env exec <ID>`. This is the single definition of "did this
+environment's exploit actually work," used identically whether a human
+runs `validate` interactively or a future headless CI runner calls the
+same resolution + check path - there is one source of truth, not a
+YAML description alongside a separately-hand-maintained CI script.
+
+| Key | Type | Required | Description |
+|-----|------|----------|--------------|
+| `expected_session` | Boolean | No | Default `true`. If `false`, `validate` passes without checking for a session at all |
+| `session_type` | String | No | `meterpreter` or `shell`. If set, the created session's type must match |
+| `expected_output` | String | No | Substring that running `id` on the session must contain, e.g. `"uid="` |
+| `timeout` | Integer | No | Seconds to wait for a session to appear before failing. Default: 120 |
+
+`validate` reports `PASS` or `FAIL` with a specific reason. If no session
+exists yet, run `test_env exec <ID>` first.
+
+**Known limitation:** `validate` looks for the session in the current
+process's `framework.sessions`. Metasploit sessions are process-local -
+they exist only in the msfconsole process that opened them, with no
+automatic cross-process visibility. `exec` and `validate` must therefore
+run in the *same* msfconsole process/window. A future headless CI runner
+would need to invoke both within a single `msfconsole -x` script (or
+equivalent single-process automation), not as two independent CLI
+invocations - this is a real constraint on any CI-alignment design here,
+not just an interactive-usage quirk.
 
 ### profiles Section
 
@@ -279,6 +324,8 @@ Each profile is a key-value pair:
 | `credentials` | Hash | No | Overrides base `shared.credentials` |
 | `volumes` | Hash | No | Overrides base `shared.volumes` |
 | `ci` | Hash | No | Overrides base `shared.ci` |
+| `provision` | Hash | No | Overrides base `shared.provision` |
+| `verify` | Hash | No | Overrides base `shared.verify` |
 
 **Profile names** must match `[a-z0-9-]+`.
 
@@ -397,10 +444,9 @@ Environment definitions are loaded by the plugin and used to:
 1. Build/pull container images
 2. Map container ports to host ports
 3. Configure health checks
-4. Set module datastore defaults
-5. Apply profile-specific overrides
-6. Apply module-level overrides (if any)
+4. Run one-time provisioning and post-provision verification, if defined
+5. Set module datastore defaults
+6. Apply profile-specific overrides
+7. Apply module-level overrides (if any)
 
 See [03-database-schema.md](https://github.com/Nayeraneru/metasploit-framework/blob/vulnenv-week1/docs/architecture/03-database-schema.md) for registry design.
-
-
