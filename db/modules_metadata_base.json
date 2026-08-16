@@ -6765,7 +6765,7 @@
     "autofilter_ports": [],
     "autofilter_services": [],
     "targets": null,
-    "mod_time": "2026-02-03 20:58:31 +0000",
+    "mod_time": "2026-08-07 09:34:29 +0000",
     "path": "/modules/auxiliary/admin/kerberos/forge_ticket.rb",
     "is_install_path": true,
     "ref_name": "admin/kerberos/forge_ticket",
@@ -87444,6 +87444,66 @@
     "session_types": false,
     "needs_cleanup": null
   },
+  "exploit_linux/http/sonicwall_sma1000_wsproxy_rce": {
+    "name": "SonicWall SMA1000 WorkPlace wsproxy SSRF Remote Command Execution",
+    "fullname": "exploit/linux/http/sonicwall_sma1000_wsproxy_rce",
+    "aliases": [],
+    "rank": 600,
+    "disclosure_date": "2026-07-14",
+    "type": "exploit",
+    "author": [
+      "Ryan Emmons",
+      "Deral Heiland",
+      "Rapid7 Vulnerability Research"
+    ],
+    "description": "This module exploits a Server-Side Request Forgery (SSRF)\n          vulnerability in the SonicWall SMA1000 WorkPlace wsproxy service to\n          access the internal Erlang distribution service.\n\n          After authenticating using the known Erlang distribution cookie, the\n          module invokes os:cmd/1 through Erlang RPC to execute arbitrary Unix\n          commands in the context of the vulnerable SMA service.\n\n          The check method performs a benign Erlang node RPC rather than\n          executing an operating system command.",
+    "references": [
+      "CVE-2026-15409",
+      "URL-https://psirt.global.sonicwall.com/vuln-detail/SNWLID-2026-0008",
+      "URL-https://www.rapid7.com/blog/post/etr-rapid7-mdr-team-discovers-new-sonicwall-sma1000-zero-days-being-actively-exploited-cve-2026-15409-cve-2026-15410/"
+    ],
+    "platform": "Linux,Unix",
+    "arch": "cmd",
+    "rport": 443,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": [
+      "Unix Command"
+    ],
+    "mod_time": "2026-07-29 15:13:38 +0000",
+    "path": "/modules/exploits/linux/http/sonicwall_sma1000_wsproxy_rce.rb",
+    "is_install_path": true,
+    "ref_name": "linux/http/sonicwall_sma1000_wsproxy_rce",
+    "check": true,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "Reliability": [
+        "repeatable-session"
+      ],
+      "SideEffects": [
+        "ioc-in-logs"
+      ]
+    },
+    "session_types": false,
+    "needs_cleanup": null
+  },
   "exploit_linux/http/sophos_utm_webadmin_sid_cmd_injection": {
     "name": "Sophos UTM WebAdmin SID Command Injection",
     "fullname": "exploit/linux/http/sophos_utm_webadmin_sid_cmd_injection",
@@ -114684,6 +114744,66 @@
     "path": "/modules/exploits/multi/http/langflow_unauth_rce_cve_2025_3248.rb",
     "is_install_path": true,
     "ref_name": "multi/http/langflow_unauth_rce_cve_2025_3248",
+    "check": true,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "SideEffects": [
+        "artifacts-on-disk",
+        "ioc-in-logs"
+      ],
+      "Reliability": [
+        "repeatable-session"
+      ]
+    },
+    "session_types": false,
+    "needs_cleanup": null
+  },
+  "exploit_multi/http/langflow_unauth_rce_cve_2026_33017": {
+    "name": "Langflow Unauth RCE",
+    "fullname": "exploit/multi/http/langflow_unauth_rce_cve_2026_33017",
+    "aliases": [],
+    "rank": 600,
+    "disclosure_date": "2026-03-20",
+    "type": "exploit",
+    "author": [
+      "Richard Howe <rhowe425>",
+      "Diamorphine"
+    ],
+    "description": "Langflow versions prior to 1.9.0 are susceptible to unauthenticated remote code execution through the\n          /api/v1/build_public_tmp/<flow_id>/flow endpoint. A remote and unauthenticated attacker can send crafted\n          HTTP requests to execute arbitrary code.",
+    "references": [
+      "CVE-2026-33017",
+      "EDB-52627",
+      "URL-https://medium.com/@aviral23/cve-2026-33017-how-i-found-an-unauthenticated-rce-in-langflow-by-reading-the-code-they-already-dc96cdce5896"
+    ],
+    "platform": "Python",
+    "arch": "python",
+    "rport": 7860,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": [
+      "Python payload"
+    ],
+    "mod_time": "2026-08-11 12:13:20 +0000",
+    "path": "/modules/exploits/multi/http/langflow_unauth_rce_cve_2026_33017.rb",
+    "is_install_path": true,
+    "ref_name": "multi/http/langflow_unauth_rce_cve_2026_33017",
     "check": true,
     "post_auth": false,
     "default_credential": false,
@@ -187903,7 +188023,7 @@
       "Windows_Fetch",
       "Windows_CMDStager"
     ],
-    "mod_time": "2026-07-29 22:34:52 +0000",
+    "mod_time": "2026-07-31 01:28:56 +0000",
     "path": "/modules/exploits/windows/http/prtg_authenticated_rce_cve_2023_32781.rb",
     "is_install_path": true,
     "ref_name": "windows/http/prtg_authenticated_rce_cve_2023_32781",
@@ -300864,6 +300984,39 @@
     "payload_type": 1,
     "staged": false
   },
+  "payload_windows/aarch64/shell/reverse_tcp": {
+    "name": "Windows AArch64 Command Shell, Windows AArch64 Reverse TCP Stager",
+    "fullname": "payload/windows/aarch64/shell/reverse_tcp",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "vinicius-batistella"
+    ],
+    "description": "Spawn a piped command shell on Windows on ARM (AArch64) (staged).\nExpects an open TCP socket handle in x0 at entry (convention sockx0).\nResolves CreateProcessA via PEB / Export Address Table hashing and\nlaunches cmd.exe with stdin/stdout/stderr redirected to the socket\nvia STARTF_USESTDHANDLES.\nConnect back to the attacker (Windows AArch64)",
+    "references": [],
+    "platform": "Windows",
+    "arch": "aarch64",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2026-08-11 15:26:00 +0000",
+    "path": "/modules/payloads/stagers/windows/aarch64/reverse_tcp.rb",
+    "is_install_path": true,
+    "ref_name": "windows/aarch64/shell/reverse_tcp",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 2,
+    "staged": true,
+    "stage_refname": "windows/aarch64/shell",
+    "stager_refname": "windows/aarch64/reverse_tcp"
+  },
   "payload_windows/aarch64/shell_reverse_tcp": {
     "name": "Windows AArch64 Command Shell, Reverse TCP Inline",
     "fullname": "payload/windows/aarch64/shell_reverse_tcp",
@@ -300882,7 +301035,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2026-07-24 00:11:10 +0000",
+    "mod_time": "2026-08-11 01:21:05 +0000",
     "path": "/modules/payloads/singles/windows/aarch64/shell_reverse_tcp.rb",
     "is_install_path": true,
     "ref_name": "windows/aarch64/shell_reverse_tcp",
