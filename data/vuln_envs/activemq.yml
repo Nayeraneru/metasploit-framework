@@ -2,6 +2,7 @@ name: activemq
 description: Apache ActiveMQ Classic with Jolokia API
 
 variants:
+  #used by exploit/multi/http/apache_activemq_jolokia_rce
   - name: "5.18.6"
     version: "5.18.6"
     image: docker.io/apache/activemq-classic:5.18.6
