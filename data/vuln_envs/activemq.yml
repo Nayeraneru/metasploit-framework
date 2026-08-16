@@ -2,13 +2,13 @@ name: activemq
 description: Apache ActiveMQ Classic with Jolokia API
 
 variants:
-  #used by exploit/multi/http/apache_activemq_jolokia_rce
+  #Used by exploit/multi/http/apache_activemq_jolokia_rce
   - name: "5.18.6"
     version: "5.18.6"
     image: docker.io/apache/activemq-classic:5.18.6
     default: true
 
-  #used by exploit/multi/misc/apache_activemq_rce_cve_2023_46604
+  #Used by exploit/multi/misc/apache_activemq_rce_cve_2023_46604
   - name: "5.18.2"
     version: "5.18.2"
     image: docker.io/dinifarb/activemq:5.18.2
@@ -54,4 +54,8 @@ shared:
 
 profiles:
   default:
-    description: Standard Apache ActiveMQ with web console and broker
+    description: Standard ActiveMQ; web console reachable via HTTP/Jolokia.
+  broker-only:
+    description: Web console not assumed reachable; only the broker port is health-checked
+    health_check:
+      type: tcp
