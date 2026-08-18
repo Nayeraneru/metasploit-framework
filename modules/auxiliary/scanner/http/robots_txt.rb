@@ -17,7 +17,12 @@ class MetasploitModule < Msf::Auxiliary
       'Name' => 'HTTP Robots.txt Content Scanner',
       'Description' => 'Detect robots.txt files and analyze its content',
       'Author' => ['et'],
-      'License' => MSF_LICENSE
+      'License' => MSF_LICENSE,
+      'VulnerableEnvironment' => {
+        'definition'      => 'httpd',
+        'default_variant' => '2.4.57',
+        'port_mapping'    => {80 => 'RPORT'}
+      }
     )
 
     register_options(

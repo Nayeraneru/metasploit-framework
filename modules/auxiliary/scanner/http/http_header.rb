@@ -26,6 +26,11 @@ class MetasploitModule < Msf::Auxiliary
           'Reliability' => UNKNOWN_RELIABILITY,
           'Stability' => UNKNOWN_STABILITY,
           'SideEffects' => UNKNOWN_SIDE_EFFECTS
+        },
+        'VulnerableEnvironment' => {
+          'definition'      => 'httpd',
+          'default_variant' => '2.4.57',
+          'port_mapping'    => {80 => 'RPORT'}
         }
       )
     )

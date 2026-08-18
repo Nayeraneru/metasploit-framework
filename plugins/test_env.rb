@@ -2057,11 +2057,15 @@ end
         # and every subsequent run fails until someone manually finds and
         # kills the stale process. Picking a fresh free port each time
         # removes the collision entirely rather than requiring cleanup.
-        %w[SRVPORT FETCH_SRVPORT].each do |opt|
-          free_port = free_local_port
-          driver.run_single("set #{opt} #{free_port}")
+        if mod.type != 'auxiliary'
+          %w[SRVPORT FETCH_SRVPORT].each do |opt|
+            if mod.options.include?(opt)
+              free_port = free_local_port
+              driver.run_single("set #{opt} #{free_port}")
+            end
+          end
         end
-
+          
         # --- Step E: run it. driver.run_single("exploit") reuses the
         # console's own exploit-execution path - AutoCheck, payload
         # generation, session creation, and all success/failure messaging
