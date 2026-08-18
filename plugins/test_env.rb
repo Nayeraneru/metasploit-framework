@@ -1682,7 +1682,7 @@ def build_resolve_environment(mod, env, options)
   # this specific image/variant), apply it now, before the container is
   # even started, so it's reflected if the user runs 'show options'.
   recommended_payload = config.dig('ci', 'exploit', 'payload')
-  if recommended_payload && mod.datastore['PAYLOAD'] != recommended_payload
+  if recommended_payload && mod.options.include?('PAYLOAD') && mod.datastore['PAYLOAD'] != recommended_payload
     print_status("Setting recommended payload for this environment: #{recommended_payload}")
     mod.datastore['PAYLOAD'] = recommended_payload
   end
@@ -2030,7 +2030,7 @@ end
           config = loader.resolve(env_meta.definition, target.env_version, env_meta.profile, env_meta.overrides) rescue nil
           ci_exploit = config&.dig('ci', 'exploit') || {}
 
-          if ci_exploit['payload']
+          if ci_exploit['payload'] && mod.options.include?('PAYLOAD')
             print_status("Setting recommended payload for this environment: #{ci_exploit['payload']}")
             driver.run_single("set PAYLOAD #{ci_exploit['payload']}")
           end
@@ -2067,8 +2067,9 @@ end
         # generation, session creation, and all success/failure messaging
         # come from that well-tested path rather than being reimplemented
         # here. See the design note above for why this matters.
-        print_status("Executing: #{target.exploit_command}")
-        driver.run_single("exploit")
+        action = mod.type == 'auxiliary' ? 'run' : 'exploit'
+        print_status("Executing: #{target.exploit_command.sub(/^exploit/, action)}")
+        driver.run_single(action)
       rescue => e
         print_error("test_env exec failed: #{e.class} - #{e.message}")
         elog("test_env exec error: #{e.class} - #{e.message}")
