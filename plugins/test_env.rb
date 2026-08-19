@@ -1595,11 +1595,13 @@ def cmd_test_env_build(args)
 
     # Step 17: apply datastore to the active module
     datastore.each do |key, value|
-      mod.datastore[key] = value
+      if mod.options.include?(key)
+        mod.datastore[key] = value
+      end
     end
 
     # Step 18: display results to user
-    build_display_results(env_id, config, datastore)
+    build_display_results(env_id, config, datastore, mod)
 
   rescue PortAllocator::NoPortsAvailable => e
     print_error("No available ports: #{e.message}")
@@ -1870,16 +1872,18 @@ def build_register_environment(runtime, container_id, mod, variant, config, allo
 end
 
 # Step 18: Display build results and suggested exploit command.
-def build_display_results(env_id, config, datastore)
+def build_display_results(env_id, config, datastore, mod)
   print_good("Environment ready.")
   print_status("Environment ID: #{env_id}")
-  datastore.each do |key, value|
+
+  applicable = datastore.select { |k, _v| mod.options.include?(k) }
+  applicable.each do |key, value|
     print_status("   #{key.ljust(12)} => #{value}")
   end
 
-
-  env = self.class.registry.get(env_id)
-  print_status("Suggested: #{env.exploit_command}")
+  action = mod.type == 'auxiliary' ? 'run' : 'exploit'
+  opts = applicable.map { |k, v| "#{k}=#{v}" }.join(' ')
+  print_status("Suggested: #{action} #{opts}")
 end
       def cmd_test_env_help
         print_line("Usage: test_env <command>")
@@ -2045,8 +2049,12 @@ end
         # RPORT/credentials by hand - single source of truth, and it's the
         # exact same hash 'test_env build' already showed the user under
         # "Suggested:", so what runs here always matches what was printed.
+        applied = {}
         target.datastore.each do |key, value|
-          driver.run_single("set #{key} #{value}")
+          if mod.options.include?(key)
+            driver.run_single("set #{key} #{value}")
+            applied[key] = value
+          end
         end
 
         # --- Step D.5: avoid Rex::BindFailed from stale listeners on
@@ -2062,6 +2070,7 @@ end
             if mod.options.include?(opt)
               free_port = free_local_port
               driver.run_single("set #{opt} #{free_port}")
+              applied[opt] = free_port
             end
           end
         end
@@ -2072,7 +2081,8 @@ end
         # come from that well-tested path rather than being reimplemented
         # here. See the design note above for why this matters.
         action = mod.type == 'auxiliary' ? 'run' : 'exploit'
-        print_status("Executing: #{target.exploit_command.sub(/^exploit/, action)}")
+        opts = applied.map { |k, v| "#{k}=#{v}" }.join(' ')
+        print_status("Executing: #{action} #{opts}")
         driver.run_single(action)
       rescue => e
         print_error("test_env exec failed: #{e.class} - #{e.message}")
