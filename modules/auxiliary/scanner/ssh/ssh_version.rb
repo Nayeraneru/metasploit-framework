@@ -28,10 +28,10 @@ class MetasploitModule < Msf::Auxiliary
       ],
       'License' => MSF_LICENSE,
       'VulnerableEnvironment' => {
-        'definition'      => 'openssh',
+        'definition' => 'openssh',
         'default_variant' => '7.2',
-        'port_mapping'    => {22 => 'RPORT'}
-      }      
+        'port_mapping' => { 22 => 'RPORT' }
+      }
     )
 
     register_options(

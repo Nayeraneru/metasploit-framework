@@ -2065,13 +2065,11 @@ end
         # and every subsequent run fails until someone manually finds and
         # kills the stale process. Picking a fresh free port each time
         # removes the collision entirely rather than requiring cleanup.
-        if mod.type != 'auxiliary'
-          %w[SRVPORT FETCH_SRVPORT].each do |opt|
-            if mod.options.include?(opt)
-              free_port = free_local_port
-              driver.run_single("set #{opt} #{free_port}")
-              applied[opt] = free_port
-            end
+        %w[SRVPORT FETCH_SRVPORT].each do |opt|
+          if mod.options.include?(opt)
+            free_port = free_local_port
+            driver.run_single("set #{opt} #{free_port}")
+            applied[opt] = free_port
           end
         end
           
