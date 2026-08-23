@@ -26,6 +26,7 @@ shared:
   ci:
     validation:
       expected_session: false
+      force_exploit: true 
 
 profiles:
   default:
