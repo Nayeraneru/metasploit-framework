@@ -1992,7 +1992,25 @@ end
         # propagate into a confusing NoMethodError three lines down. This
         # is the "improve error handling" deliverable in practice: every
         # precondition gets its own guard and its own message.
-        id = args.shift.to_i
+        id = nil
+        background = false
+
+        args.each do |arg|
+          case arg
+          when '-z', '--background'
+            background=true
+          when /^-/
+            print_warning("Unknown option: #{arg}")
+          else
+            id = arg.to_i if id.nil?
+          end
+        end
+
+        unless id
+          print_error("No environment ID specified.")
+          return
+        end
+
         target = self.class.registry.get(id)
 
         unless target
@@ -2078,7 +2096,14 @@ end
         # generation, session creation, and all success/failure messaging
         # come from that well-tested path rather than being reimplemented
         # here. See the design note above for why this matters.
-        action = mod.type == 'auxiliary' ? 'run' : 'exploit'
+        action =  if mod.type == 'auxiliary'
+                    'run'
+                  elsif background
+                    'exploit -z'
+                  else
+                    'exploit'
+                  end
+
         opts = applied.map { |k, v| "#{k}=#{v}" }.join(' ')
         print_status("Executing: #{action} #{opts}")
         driver.run_single(action)
