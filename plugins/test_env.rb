@@ -2052,13 +2052,17 @@ end
           config = loader.resolve(env_meta.definition, target.env_version, env_meta.profile, env_meta.overrides) rescue nil
           ci_exploit = config&.dig('ci', 'exploit') || {}
 
-          if ci_exploit['payload'] && !mod.datastore['PAYLOAD'].nil?
+          if ci_exploit['payload'] && mod.datastore['PAYLOAD'] != ci_exploit['payload']
             print_status("Setting recommended payload for this environment: #{ci_exploit['payload']}")
             driver.run_single("set PAYLOAD #{ci_exploit['payload']}")
           end
 
           ci_exploit['options']&.each do |key, value|
             driver.run_single("set #{key} #{value}")
+          end
+
+          if ci_exploit['force_exploit']
+            driver.run_single("set ForceExploit true")
           end
         end
 

@@ -59,3 +59,6 @@ profiles:
     description: Web console not assumed reachable; only the broker port is health-checked
     health_check:
       type: tcp
+    ci:
+      exploit:
+        force_exploit: true 
