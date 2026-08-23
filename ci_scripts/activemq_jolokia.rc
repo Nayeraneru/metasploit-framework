@@ -1,8 +1,7 @@
 load test_env
 use exploit/multi/http/apache_activemq_jolokia_rce
 test_env build
-set ExitOnSession false
-test_env exec 1
+test_env exec 1 -z
 test_env validate 1
 test_env remove 1
 exit -y
