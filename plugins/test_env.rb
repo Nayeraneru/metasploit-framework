@@ -1684,7 +1684,7 @@ def build_resolve_environment(mod, env, options)
   # this specific image/variant), apply it now, before the container is
   # even started, so it's reflected if the user runs 'show options'.
   recommended_payload = config.dig('ci', 'exploit', 'payload')
-  if recommended_payload && mod.options.include?('PAYLOAD') && mod.datastore['PAYLOAD'] != recommended_payload
+  if recommended_payload && !mod.datastore['PAYLOAD'].nil? && mod.datastore['PAYLOAD'] != recommended_payload
     print_status("Setting recommended payload for this environment: #{recommended_payload}")
     mod.datastore['PAYLOAD'] = recommended_payload
   end
@@ -2034,7 +2034,7 @@ end
           config = loader.resolve(env_meta.definition, target.env_version, env_meta.profile, env_meta.overrides) rescue nil
           ci_exploit = config&.dig('ci', 'exploit') || {}
 
-          if ci_exploit['payload'] && mod.options.include?('PAYLOAD')
+          if ci_exploit['payload'] && !mod.datastore['PAYLOAD'].nil?
             print_status("Setting recommended payload for this environment: #{ci_exploit['payload']}")
             driver.run_single("set PAYLOAD #{ci_exploit['payload']}")
           end
