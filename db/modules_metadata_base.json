@@ -23238,6 +23238,62 @@
       }
     ]
   },
+  "auxiliary_gather/forgejo_orgmode_fileread_cve_2026_59774": {
+    "name": "Forgejo Arbitrary File Read via Org-mode Include",
+    "fullname": "auxiliary/gather/forgejo_orgmode_fileread_cve_2026_59774",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": "2026-07-30",
+    "type": "auxiliary",
+    "author": [
+      "xbow-security",
+      "NightRang3r"
+    ],
+    "description": "Forgejo versions 7.0 through 15.0.5 and 16.0.0 through 16.0.1 are\n          vulnerable to an arbitrary file read via the markup rendering API\n          endpoint. The go-org library's default ReadFile callback\n          (ioutil.ReadFile) is not overridden, allowing the #+INCLUDE directive\n          to read arbitrary files accessible to the service user.\n\n          Valid credentials are required to access the API markup endpoint.\n          Extracting sensitive files such as app.ini can expose INTERNAL_TOKEN\n          and other secrets, potentially leading to remote code execution.",
+    "references": [
+      "CVE-2026-59774",
+      "GHSA-6v53-hr58-556r",
+      "URL-https://codeberg.org/forgejo/forgejo/pulls/13682"
+    ],
+    "platform": "",
+    "arch": "",
+    "rport": 3000,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": null,
+    "mod_time": "2026-08-12 10:32:09 +0000",
+    "path": "/modules/auxiliary/gather/forgejo_orgmode_fileread_cve_2026_59774.rb",
+    "is_install_path": true,
+    "ref_name": "gather/forgejo_orgmode_fileread_cve_2026_59774",
+    "check": true,
+    "post_auth": true,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "SideEffects": [
+        "ioc-in-logs"
+      ],
+      "Reliability": []
+    },
+    "session_types": false,
+    "needs_cleanup": false,
+    "actions": []
+  },
   "auxiliary_gather/fortios_vpnssl_traversal_creds_leak": {
     "name": "FortiOS Path Traversal Credential Gatherer",
     "fullname": "auxiliary/gather/fortios_vpnssl_traversal_creds_leak",
@@ -31754,10 +31810,13 @@
     "disclosure_date": null,
     "type": "auxiliary",
     "author": [
-      "hdm <x@hdm.io>"
+      "hdm <x@hdm.io>",
+      "g0tmi1k"
     ],
-    "description": "Detect FTP Version.",
-    "references": [],
+    "description": "This module tries to identify the version of an FTP service by reading its banner.",
+    "references": [
+      "URL-https://www.ietf.org/rfc/rfc959"
+    ],
     "platform": "",
     "arch": "",
     "rport": 21,
@@ -31769,14 +31828,22 @@
       "ftp"
     ],
     "targets": null,
-    "mod_time": "2025-06-20 13:20:44 +0000",
+    "mod_time": "2026-05-18 09:52:28 +0000",
     "path": "/modules/auxiliary/scanner/ftp/ftp_version.rb",
     "is_install_path": true,
     "ref_name": "scanner/ftp/ftp_version",
     "check": false,
     "post_auth": false,
     "default_credential": false,
-    "notes": {},
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "Reliability": [],
+      "SideEffects": [
+        "ioc-in-logs"
+      ]
+    },
     "session_types": false,
     "needs_cleanup": false,
     "actions": []
@@ -35080,6 +35147,61 @@
     "post_auth": false,
     "default_credential": false,
     "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "actions": []
+  },
+  "auxiliary_scanner/http/concrete_cms_file_usage_disclosure": {
+    "name": "Concrete CMS Unauthenticated File Usage Disclosure",
+    "fullname": "auxiliary/scanner/http/concrete_cms_file_usage_disclosure",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": "2026-05-21",
+    "type": "auxiliary",
+    "author": [
+      "dividesbyzer0"
+    ],
+    "description": "Concrete CMS (formerly concrete5) 9.x before 9.5.1 exposes the file usage\n          dialog controller at /ccm/system/dialogs/file/usage/<fID> without a view\n          permission check (CVE-2026-6826). An unauthenticated attacker can enumerate the\n          numeric file ID space and, for every file registered in the file manager, learn\n          where it is used: the referencing Page ID, page Version, file Handle, and the\n          page Location (path). This discloses the site's internal page tree, unpublished\n          and internal page paths, and file handles to anonymous callers.\n\n          This module enumerates a range of file IDs and reports the disclosed usage\n          records. It is read-only.",
+    "references": [
+      "CVE-2026-6826",
+      "URL-https://documentation.concretecms.org/9-x/developers/introduction/version-history/951-release-notes",
+      "URL-https://dailycve.com/concrete-cms-unauthenticated-file-usage-disclosure-cve-2026-6826-medium/"
+    ],
+    "platform": "",
+    "arch": "",
+    "rport": 80,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": null,
+    "mod_time": "2026-08-16 12:54:09 +0000",
+    "path": "/modules/auxiliary/scanner/http/concrete_cms_file_usage_disclosure.rb",
+    "is_install_path": true,
+    "ref_name": "scanner/http/concrete_cms_file_usage_disclosure",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "SideEffects": [
+        "ioc-in-logs"
+      ],
+      "Reliability": []
+    },
     "session_types": false,
     "needs_cleanup": false,
     "actions": []
@@ -99682,7 +99804,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-05-07 14:31:12 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/autostart.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/autostart",
@@ -99783,7 +99905,7 @@
     "targets": [
       "Auto"
     ],
-    "mod_time": "2025-09-16 15:57:24 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/docker_image.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/docker_image",
@@ -99870,7 +99992,10 @@
       "Zack Didcott"
     ],
     "description": "Gain persistence for specified payload on IGEL OS Workspace Edition, by writing\n          a payload to disk or base64-encoding and executing from registry.",
-    "references": [],
+    "references": [
+      "ATT&CK-T1546",
+      "ATT&CK-T1547"
+    ],
     "platform": "Linux",
     "arch": "cmd, x64",
     "rport": null,
@@ -99880,7 +100005,7 @@
       "Linux Command",
       "Linux Dropper"
     ],
-    "mod_time": "2025-12-17 16:12:31 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/igel_persistence.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/igel_persistence",
@@ -99935,7 +100060,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/init_openrc.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/init_openrc",
@@ -99991,7 +100116,7 @@
       "systemd",
       "systemd user"
     ],
-    "mod_time": "2026-05-07 14:31:12 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/init_systemd.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/init_systemd",
@@ -100045,7 +100170,7 @@
       "systemd",
       "systemd user"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/init_systemd_override.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/init_systemd_override",
@@ -100098,7 +100223,7 @@
     "targets": [
       "System V"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/init_sysvinit.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/init_sysvinit",
@@ -100152,7 +100277,7 @@
     "targets": [
       "Upstart"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/init_upstart.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/init_upstart",
@@ -100309,7 +100434,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-01-09 16:22:24 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/udev.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/udev",
@@ -100461,7 +100586,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/linux/persistence/yum_package_manager.rb",
     "is_install_path": true,
     "ref_name": "linux/persistence/yum_package_manager",
@@ -111105,6 +111230,66 @@
     "session_types": false,
     "needs_cleanup": null
   },
+  "exploit_multi/http/flowise_mcp_rce": {
+    "name": "Flowise MCP Server Remote Code Execution",
+    "fullname": "exploit/multi/http/flowise_mcp_rce",
+    "aliases": [],
+    "rank": 600,
+    "disclosure_date": "2026-06-23",
+    "type": "exploit",
+    "author": [
+      "cn-panda",
+      "ABDUL JAFAROV <https://github.com/jafarov007>"
+    ],
+    "description": "Flowise versions from 2.2.7 prior to 3.1.2 are vulnerable to remote code execution\n          through the Custom MCP (Model Context Protocol) node configuration.\n\n          The vulnerability exists in the /api/v1/node-load-method/customMCP endpoint,\n          which accepts arbitrary command and argument configurations for MCP server\n          initialization. An authenticated attacker can abuse the npx --yes flag to\n          fetch and execute a malicious npm package from an attacker-controlled HTTP\n          server, achieving arbitrary command execution on the Flowise host.\n\n          This module creates a malicious npm package tar archive in memory, serves it\n          via Metasploit's built-in HTTP server, then triggers the vulnerable endpoint\n          to download and execute the package via npx.\n\n          To interact with the obtained shell, use the command: sessions -i <id>\n          (for example: sessions -i 1).",
+    "references": [
+      "CVE-2026-56274",
+      "CWE-78",
+      "GHSA-GHSA-m99r-2hxc-cp3q"
+    ],
+    "platform": "Unix",
+    "arch": "cmd",
+    "rport": 3000,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": [
+      "Unix Command"
+    ],
+    "mod_time": "2026-08-20 18:02:33 +0000",
+    "path": "/modules/exploits/multi/http/flowise_mcp_rce.rb",
+    "is_install_path": true,
+    "ref_name": "multi/http/flowise_mcp_rce",
+    "check": true,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "Reliability": [
+        "repeatable-session"
+      ],
+      "SideEffects": [
+        "artifacts-on-disk",
+        "ioc-in-logs"
+      ]
+    },
+    "session_types": false,
+    "needs_cleanup": null
+  },
   "exploit_multi/http/fortra_goanywhere_mft_rce_cve_2024_0204": {
     "name": "Fortra GoAnywhere MFT Unauthenticated Remote Code Execution",
     "fullname": "exploit/multi/http/fortra_goanywhere_mft_rce_cve_2024_0204",
@@ -111710,7 +111895,7 @@
       "Ghost >= 0.7.2, <= 6.19.0 / Unix payload",
       "Ghost >= 0.7.2, <= 6.19.0 / Windows payload"
     ],
-    "mod_time": "2026-08-07 05:21:48 +0000",
+    "mod_time": "2026-08-20 14:26:49 +0000",
     "path": "/modules/exploits/multi/http/ghostcms_auth_rce_cve_2026_29053.rb",
     "is_install_path": true,
     "ref_name": "multi/http/ghostcms_auth_rce_cve_2026_29053",
@@ -114813,6 +114998,63 @@
       ],
       "SideEffects": [
         "artifacts-on-disk",
+        "ioc-in-logs"
+      ],
+      "Reliability": [
+        "repeatable-session"
+      ]
+    },
+    "session_types": false,
+    "needs_cleanup": null
+  },
+  "exploit_multi/http/langflow_unauth_rce_cve_2026_9198": {
+    "name": "Langflow AI auto_login RCE",
+    "fullname": "exploit/multi/http/langflow_unauth_rce_cve_2026_9198",
+    "aliases": [],
+    "rank": 600,
+    "disclosure_date": "2026-07-17",
+    "type": "exploit",
+    "author": [
+      "Richard Howe <rhowe425>"
+    ],
+    "description": "Langflow versions 1.10.0 and below are susceptible to\n          unauthenticated remote code execution. By chaining\n          /api/v1/auto_login with /api/v1/validate/code, a remote\n          unauthenticated attacker can send crafted HTTP requests to execute\n          arbitrary code.",
+    "references": [
+      "CVE-2026-9198",
+      "URL-https://www.cisa.gov/known-exploited-vulnerabilities-catalog?field_cve=CVE-2026-9198"
+    ],
+    "platform": "Python",
+    "arch": "python",
+    "rport": 7860,
+    "autofilter_ports": [
+      80,
+      8080,
+      443,
+      8000,
+      8888,
+      8880,
+      8008,
+      3000,
+      8443
+    ],
+    "autofilter_services": [
+      "http",
+      "https"
+    ],
+    "targets": [
+      "Python payload"
+    ],
+    "mod_time": "2026-08-21 14:02:04 +0000",
+    "path": "/modules/exploits/multi/http/langflow_unauth_rce_cve_2026_9198.rb",
+    "is_install_path": true,
+    "ref_name": "multi/http/langflow_unauth_rce_cve_2026_9198",
+    "check": true,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {
+      "Stability": [
+        "crash-safe"
+      ],
+      "SideEffects": [
         "ioc-in-logs"
       ],
       "Reliability": [
@@ -132886,7 +133128,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/multi/persistence/at.rb",
     "is_install_path": true,
     "ref_name": "multi/persistence/at",
@@ -132927,7 +133169,8 @@
     "references": [
       "URL-https://portswigger.net/burp/documentation/desktop/extensions/creating",
       "URL-https://portswigger.net/burp/documentation/desktop/troubleshooting/launch-from-command-line",
-      "ATT&CK-T1176"
+      "ATT&CK-T1176",
+      "ATT&CK-T1546"
     ],
     "platform": "Java,Unix,Windows",
     "arch": "java, cmd",
@@ -132939,7 +133182,7 @@
       "Linux",
       "Windows"
     ],
-    "mod_time": "2026-05-22 11:40:23 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/multi/persistence/burp_extension.rb",
     "is_install_path": true,
     "ref_name": "multi/persistence/burp_extension",
@@ -133002,7 +133245,7 @@
       "OSX User Crontab",
       "System Crontab"
     ],
-    "mod_time": "2026-01-08 21:00:39 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/multi/persistence/cron.rb",
     "is_install_path": true,
     "ref_name": "multi/persistence/cron",
@@ -133100,7 +133343,8 @@
       "URL-https://forum.obsidian.md/t/can-obsidian-plugins-have-malware/34491",
       "URL-https://help.obsidian.md/Extending+Obsidian/Plugin+security",
       "URL-https://thomas-byrne.co.uk/research/obsidian-malicious-plugins/obsidian-research/",
-      "ATT&CK-T1176"
+      "ATT&CK-T1176",
+      "ATT&CK-T1546"
     ],
     "platform": "OSX,Unix,Windows",
     "arch": "cmd",
@@ -133113,7 +133357,7 @@
       "OSX",
       "Windows"
     ],
-    "mod_time": "2026-05-22 11:40:23 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/multi/persistence/obsidian_plugin.rb",
     "is_install_path": true,
     "ref_name": "multi/persistence/obsidian_plugin",
@@ -133276,7 +133520,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-01-26 16:44:46 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/multi/persistence/ssh_key.rb",
     "is_install_path": true,
     "ref_name": "multi/persistence/ssh_key",
@@ -136722,7 +136966,7 @@
       "Python payload",
       "Command payload"
     ],
-    "mod_time": "2026-05-07 14:31:12 +0000",
+    "mod_time": "2026-08-21 11:58:54 +0000",
     "path": "/modules/exploits/osx/persistence/launch_plist.rb",
     "is_install_path": true,
     "ref_name": "osx/persistence/launch_plist",
@@ -193927,7 +194171,7 @@
       "Windows x86",
       "Windows x64"
     ],
-    "mod_time": "2026-04-22 11:58:46 +0000",
+    "mod_time": "2026-08-20 14:54:23 +0000",
     "path": "/modules/exploits/windows/local/bypassuac_fodhelper.rb",
     "is_install_path": true,
     "ref_name": "windows/local/bypassuac_fodhelper",
@@ -206773,7 +207017,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-04-14 17:16:54 +0000",
+    "mod_time": "2026-05-25 12:53:27 +0000",
     "path": "/modules/exploits/windows/persistence/bits.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/bits",
@@ -206977,7 +207221,7 @@
     "targets": [
       "Auto"
     ],
-    "mod_time": "2026-05-07 14:31:12 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/powershell_profile.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/powershell_profile",
@@ -207193,7 +207437,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-03-21 12:21:09 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/service.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/service",
@@ -207250,7 +207494,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-01-11 07:43:43 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/service_for_user/event.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/service_for_user/event",
@@ -207307,7 +207551,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-01-11 07:43:43 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/service_for_user/lock_unlock.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/service_for_user/lock_unlock",
@@ -207364,7 +207608,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-01-11 07:43:43 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/service_for_user/logon.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/service_for_user/logon",
@@ -207420,7 +207664,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2025-12-27 07:33:15 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/service_for_user/schedule.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/service_for_user/schedule",
@@ -207571,7 +207815,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-02-17 16:32:34 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/telemetry.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/telemetry",
@@ -207839,7 +208083,7 @@
     "targets": [
       "Windows"
     ],
-    "mod_time": "2026-01-11 07:25:13 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/wmi/wmi_event_subscription_uptime.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/wmi/wmi_event_subscription_uptime",
@@ -207892,7 +208136,7 @@
     "targets": [
       "Automatic"
     ],
-    "mod_time": "2026-02-21 06:13:23 +0000",
+    "mod_time": "2026-05-25 12:05:13 +0000",
     "path": "/modules/exploits/windows/persistence/wsl/registry.rb",
     "is_install_path": true,
     "ref_name": "windows/persistence/wsl/registry",
@@ -211838,7 +212082,7 @@
       "ATT&CK-T1550.002"
     ],
     "platform": "Windows",
-    "arch": "x86, x64, cmd",
+    "arch": "x86, x64, aarch64, cmd",
     "rport": 445,
     "autofilter_ports": [
       139,
@@ -211855,7 +212099,7 @@
       "MOF upload",
       "Command"
     ],
-    "mod_time": "2026-06-24 14:29:47 +0000",
+    "mod_time": "2026-08-17 18:01:09 +0000",
     "path": "/modules/exploits/windows/smb/psexec.rb",
     "is_install_path": true,
     "ref_name": "windows/smb/psexec",
@@ -216877,6 +217121,41 @@
     "adapted_refname": "linux/armle/shell_reverse_tcp",
     "staged": false
   },
+  "payload_cmd/linux/ftp/mips64/exec": {
+    "name": "FTP Fetch, Linux Execute Command",
+    "fullname": "payload/cmd/linux/ftp/mips64/exec",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "Brendan Watters",
+      "Spencer McIntyre",
+      "Diego Ledda"
+    ],
+    "description": "Fetch and execute a MIPS64 payload from an FTP server.\nExecute an arbitrary command or just a /bin/sh shell",
+    "references": [],
+    "platform": "Linux",
+    "arch": "cmd",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2026-05-12 17:42:59 +0000",
+    "path": "/modules/payloads/adapters/cmd/linux/ftp/mips64.rb",
+    "is_install_path": true,
+    "ref_name": "cmd/linux/ftp/mips64/exec",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 8,
+    "adapter_refname": "cmd/linux/ftp/mips64",
+    "adapted_refname": "linux/mips64/exec",
+    "staged": false
+  },
   "payload_cmd/linux/ftp/mips64/meterpreter_reverse_http": {
     "name": "FTP Fetch",
     "fullname": "payload/cmd/linux/ftp/mips64/meterpreter_reverse_http",
@@ -216999,9 +217278,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSBE payload from an FTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes.",
+    "description": "Fetch and execute an MIPSBE payload from an FTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -217340,9 +217620,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSLE payload from an FTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes as well as\n          on targets with extremely limited buffer space.",
+    "description": "Fetch and execute an MIPSLE payload from an FTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -221386,6 +221667,41 @@
     "adapted_refname": "linux/armle/shell_reverse_tcp",
     "staged": false
   },
+  "payload_cmd/linux/http/mips64/exec": {
+    "name": "HTTP Fetch, Linux Execute Command",
+    "fullname": "payload/cmd/linux/http/mips64/exec",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "Brendan Watters",
+      "Spencer McIntyre",
+      "Diego Ledda"
+    ],
+    "description": "Fetch and execute a MIPS64 payload from an HTTP server.\nExecute an arbitrary command or just a /bin/sh shell",
+    "references": [],
+    "platform": "Linux",
+    "arch": "cmd",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2023-05-25 13:20:59 +0000",
+    "path": "/modules/payloads/adapters/cmd/linux/http/mips64.rb",
+    "is_install_path": true,
+    "ref_name": "cmd/linux/http/mips64/exec",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 8,
+    "adapter_refname": "cmd/linux/http/mips64",
+    "adapted_refname": "linux/mips64/exec",
+    "staged": false
+  },
   "payload_cmd/linux/http/mips64/meterpreter_reverse_http": {
     "name": "HTTP Fetch",
     "fullname": "payload/cmd/linux/http/mips64/meterpreter_reverse_http",
@@ -221508,9 +221824,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSBE payload from an HTTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes.",
+    "description": "Fetch and execute an MIPSBE payload from an HTTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -221849,9 +222166,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSLE payload from an HTTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes as well as\n          on targets with extremely limited buffer space.",
+    "description": "Fetch and execute an MIPSLE payload from an HTTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -225930,6 +226248,41 @@
     "adapted_refname": "linux/armle/shell_reverse_tcp",
     "staged": false
   },
+  "payload_cmd/linux/https/mips64/exec": {
+    "name": "HTTPS Fetch, Linux Execute Command",
+    "fullname": "payload/cmd/linux/https/mips64/exec",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "Brendan Watters",
+      "Spencer McIntyre",
+      "Diego Ledda"
+    ],
+    "description": "Fetch and execute an MIPS64 payload from an HTTPS server.\nExecute an arbitrary command or just a /bin/sh shell",
+    "references": [],
+    "platform": "Linux",
+    "arch": "cmd",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2023-06-09 16:47:45 +0000",
+    "path": "/modules/payloads/adapters/cmd/linux/https/mips64.rb",
+    "is_install_path": true,
+    "ref_name": "cmd/linux/https/mips64/exec",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 8,
+    "adapter_refname": "cmd/linux/https/mips64",
+    "adapted_refname": "linux/mips64/exec",
+    "staged": false
+  },
   "payload_cmd/linux/https/mips64/meterpreter_reverse_http": {
     "name": "HTTPS Fetch",
     "fullname": "payload/cmd/linux/https/mips64/meterpreter_reverse_http",
@@ -226052,9 +226405,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSBE payload from an HTTPS server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes.",
+    "description": "Fetch and execute an MIPSBE payload from an HTTPS server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -226393,9 +226747,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSLE payload from an HTTPS server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes as well as\n          on targets with extremely limited buffer space.",
+    "description": "Fetch and execute an MIPSLE payload from an HTTPS server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -230474,6 +230829,41 @@
     "adapted_refname": "linux/armle/shell_reverse_tcp",
     "staged": false
   },
+  "payload_cmd/linux/tftp/mips64/exec": {
+    "name": "TFTP Fetch, Linux Execute Command",
+    "fullname": "payload/cmd/linux/tftp/mips64/exec",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "Brendan Watters",
+      "Spencer McIntyre",
+      "Diego Ledda"
+    ],
+    "description": "Fetch and execute a MIPS64 payload from a TFTP server.\nExecute an arbitrary command or just a /bin/sh shell",
+    "references": [],
+    "platform": "Linux",
+    "arch": "cmd",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2023-05-25 13:20:59 +0000",
+    "path": "/modules/payloads/adapters/cmd/linux/tftp/mips64.rb",
+    "is_install_path": true,
+    "ref_name": "cmd/linux/tftp/mips64/exec",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 8,
+    "adapter_refname": "cmd/linux/tftp/mips64",
+    "adapted_refname": "linux/mips64/exec",
+    "staged": false
+  },
   "payload_cmd/linux/tftp/mips64/meterpreter_reverse_http": {
     "name": "TFTP Fetch",
     "fullname": "payload/cmd/linux/tftp/mips64/meterpreter_reverse_http",
@@ -230596,9 +230986,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSBE payload from a TFTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes.",
+    "description": "Fetch and execute an MIPSBE payload from a TFTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -230937,9 +231328,10 @@
       "Brendan Watters",
       "Spencer McIntyre",
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "Fetch and execute an MIPSLE payload from a TFTP server.\n\n          A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes as well as\n          on targets with extremely limited buffer space.",
+    "description": "Fetch and execute an MIPSLE payload from a TFTP server.\nExecute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -292465,6 +292857,37 @@
     "payload_type": 1,
     "staged": false
   },
+  "payload_linux/mips64/exec": {
+    "name": "Linux Execute Command",
+    "fullname": "payload/linux/mips64/exec",
+    "aliases": [],
+    "rank": 300,
+    "disclosure_date": null,
+    "type": "payload",
+    "author": [
+      "Diego Ledda"
+    ],
+    "description": "Execute an arbitrary command or just a /bin/sh shell",
+    "references": [],
+    "platform": "Linux",
+    "arch": "mips64",
+    "rport": null,
+    "autofilter_ports": null,
+    "autofilter_services": null,
+    "targets": null,
+    "mod_time": "2026-05-05 05:24:14 +0000",
+    "path": "/modules/payloads/singles/linux/mips64/exec.rb",
+    "is_install_path": true,
+    "ref_name": "linux/mips64/exec",
+    "check": false,
+    "post_auth": false,
+    "default_credential": false,
+    "notes": {},
+    "session_types": false,
+    "needs_cleanup": false,
+    "payload_type": 1,
+    "staged": false
+  },
   "payload_linux/mips64/meterpreter_reverse_http": {
     "name": "Linux Meterpreter, Reverse HTTP Inline",
     "fullname": "payload/linux/mips64/meterpreter_reverse_http",
@@ -292573,9 +292996,10 @@
     "type": "payload",
     "author": [
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Diego Ledda"
     ],
-    "description": "A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes.",
+    "description": "Execute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -292585,7 +293009,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2025-04-20 02:57:34 +0000",
+    "mod_time": "2026-08-21 22:07:38 +0000",
     "path": "/modules/payloads/singles/linux/mipsbe/exec.rb",
     "is_install_path": true,
     "ref_name": "linux/mipsbe/exec",
@@ -292878,9 +293302,11 @@
     "type": "payload",
     "author": [
       "Michael Messner <devnull@s3cur1ty.de>",
-      "entropy <entropy@phiral.net>"
+      "entropy <entropy@phiral.net>",
+      "Spencer McIntyre",
+      "Diego Ledda"
     ],
-    "description": "A very small shellcode for executing commands.\n          This module is sometimes helpful for testing purposes as well as\n          on targets with extremely limited buffer space.",
+    "description": "Execute an arbitrary command or just a /bin/sh shell",
     "references": [
       "EDB-17940"
     ],
@@ -292890,7 +293316,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2025-04-20 02:57:34 +0000",
+    "mod_time": "2026-08-21 22:07:38 +0000",
     "path": "/modules/payloads/singles/linux/mipsle/exec.rb",
     "is_install_path": true,
     "ref_name": "linux/mipsle/exec",
@@ -310247,7 +310673,7 @@
     "autofilter_ports": null,
     "autofilter_services": null,
     "targets": null,
-    "mod_time": "2026-07-30 10:26:56 +0000",
+    "mod_time": "2026-08-20 17:22:11 +0000",
     "path": "/modules/payloads/singles/windows/x64/meterpreter_bind_named_pipe.rb",
     "is_install_path": true,
     "ref_name": "windows/x64/meterpreter_bind_named_pipe",
