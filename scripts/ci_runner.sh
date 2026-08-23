@@ -34,6 +34,15 @@ if [[ ! -x "./msfconsole" ]]; then
 fi
 
 # ---------------------------------------------------------------------
+# Conditionally force exploit for modules with weak TCP health checks
+# where AutoCheck can race against protocol initialization.
+# ---------------------------------------------------------------------
+FORCE_EXPLOIT=""
+if [[ "$MODULE" == "exploit/multi/misc/apache_activemq_rce_cve_2023_46604" ]]; then
+    FORCE_EXPLOIT="set ForceExploit true"
+fi
+
+# ---------------------------------------------------------------------
 # Generate unique temp files (supports parallel CI jobs)
 # ---------------------------------------------------------------------
 TIMESTAMP=$(date +%s)_$$
@@ -46,6 +55,7 @@ LOG_FILE="/tmp/test_env_${TIMESTAMP}.log"
 cat > "$RC_FILE" <<EOF
 load test_env
 use ${MODULE}
+${FORCE_EXPLOIT}
 test_env build VARIANT=${VARIANT} PROFILE=${PROFILE}
 test_env exec 1 -z
 test_env validate 1
@@ -57,9 +67,11 @@ echo ">>> CI Runner Started"
 echo ">>> Module:    $MODULE"
 echo ">>> Variant:   $VARIANT"
 echo ">>> Profile:   $PROFILE"
+[[ -n "$FORCE_EXPLOIT" ]] && echo ">>> Override:  ForceExploit enabled (TCP health-check race mitigation)"
 echo ">>> RC Script: $RC_FILE"
 echo ">>> Log File:  $LOG_FILE"
 echo ""
+
 
 # ---------------------------------------------------------------------
 # Execute msfconsole headlessly
