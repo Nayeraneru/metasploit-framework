@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [ master, vulnenv ]
 
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -92,7 +93,8 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
-          bundler-cache: true
+          # bundler-cache: true removed — we run bundle install manually
+          # after system libraries are present
 
       - name: Verify Docker runtime
         run: |
@@ -104,7 +106,9 @@ jobs:
         run: chmod +x ./scripts/ci_runner.sh
 
       - name: Install framework dependencies
-        run: bundle install
+        run: |
+          gem install bundler --no-document
+          bundle install --jobs 4 --retry 3
 
       - name: Run test_env validation
         run: |
