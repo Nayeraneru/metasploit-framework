@@ -1575,6 +1575,13 @@ def cmd_test_env_build(args)
     # Step 14: health check BEFORE registering
     return unless build_wait_for_health(runtime, container_id, config, port_mapping, allocated_ports)
 
+    # TCP health checks confirm liveness (port open) but not readiness
+    # (protocol fully initialized). Some services (e.g. ActiveMQ OpenWire)
+    # accept connections before the protocol handler is ready.
+    if config.dig('health_check', 'type') == 'tcp'
+      print_status("TCP port open; waiting 5 seconds for protocol initialization...")
+      sleep 5
+    end
     # Step 15: build the datastore (RHOSTS/RPORT/credentials/etc.)
     datastore = build_construct_datastore(config, allocated_ports, port_mapping)
 
