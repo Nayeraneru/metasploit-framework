@@ -11,7 +11,6 @@ require 'fileutils'
 require 'timeout'   
 require 'net/http'
 require 'rex/text/table'
-require 'delegate'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
