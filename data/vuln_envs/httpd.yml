@@ -22,6 +22,7 @@ shared:
   ci:
     validation:
       expected_session: false
+      expected_output: "Apache"
 
 profiles:
   default:

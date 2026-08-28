@@ -11,6 +11,7 @@ require 'fileutils'
 require 'timeout'   
 require 'net/http'
 require 'rex/text/table'
+require 'delegate'
 
 module Msf
   class Plugin::TestEnv < Msf::Plugin
@@ -587,6 +588,8 @@ module Msf
         false
       end
     end
+
+    
     # =====================================================================
     # VulnTarget — ActiveModel-based environment instance
     # =====================================================================
@@ -597,6 +600,7 @@ module Msf
       attr_accessor :local_id, :container_id, :module_fullname, :env_version,
                     :runtime, :image_ref, :status, :datastore, :allocated_ports,
                     :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
+                    
 
       validates :container_id, presence: true
       validates :module_fullname, presence: true
@@ -669,7 +673,7 @@ module Msf
           'created_at' => created_at&.iso8601,
           'started_at' => started_at&.iso8601,
           'stopped_at' => stopped_at&.iso8601,
-          'removed_at' => removed_at&.iso8601
+          'removed_at' => removed_at&.iso8601,
         }
       end
 
@@ -688,7 +692,7 @@ module Msf
           created_at: parse_time(hash['created_at']),
           started_at: parse_time(hash['started_at']),
           stopped_at: parse_time(hash['stopped_at']),
-          removed_at: parse_time(hash['removed_at'])
+          removed_at: parse_time(hash['removed_at']),
         )
       end
 
@@ -959,6 +963,10 @@ module Msf
 
         # Hard reset: fresh empty environment state → next_id will return 1
         @vuln_env = VulnEnvironment.new(instance_id: @instance_id)
+        @store.save(@vuln_env)
+      end
+
+      def save_state
         @store.save(@vuln_env)
       end
 
@@ -2237,7 +2245,74 @@ end
         print_status("Validating environment #{id} (#{target.module_fullname}) against #{env_meta.definition}'s ci.validation...")
 
         unless expected_session
-          print_good("PASS: ci.validation does not require a session.")
+          print_status("No session required; validating service behavior...")
+
+          expected_text = validation['expected_output']
+          probe_port = target.allocated_ports.values.first
+
+          if expected_text && !expected_text.empty?
+            response = nil
+
+            # Probe based on the environment's health check type
+            case config.dig('health_check', 'type')
+            when 'http'
+              begin
+                uri = URI("http://127.0.0.1:#{probe_port}/")
+                http = Net::HTTP.new(uri.host, uri.port)
+                http.open_timeout = 5
+                http.read_timeout = 5
+                response = http.request(Net::HTTP::Get.new(uri))
+                response_body = response.body.to_s
+                response_headers = response.to_hash.map { |k, v| "#{k}: #{v.join}" }.join("\n")
+                response = "#{response_headers}\n\n#{response_body}"
+              rescue => e
+                print_error("FAIL: HTTP probe failed: #{e.message}")
+                return
+              end
+
+            when 'tcp'
+              begin
+                socket = TCPSocket.new('127.0.0.1', probe_port)
+                response = socket.gets.to_s
+                socket.close
+              rescue => e
+                print_error("FAIL: TCP probe failed: #{e.message}")
+                return
+              end
+            end
+
+            if response && response.include?(expected_text)
+              print_good("Service response contains expected text: '#{expected_text}'")
+            else
+              print_error("FAIL: service response did not contain '#{expected_text}'")
+              print_status("--- Response (first 400 chars) ---")
+              print_status(response.to_s[0..400])
+              print_status("----------------------------------")
+              return
+            end
+          else
+            print_warning("No ci.validation.expected_output defined for this auxiliary module.")
+            print_warning("Falling back to smoke test (module executed without errors).")
+          end
+
+          # Layer 2: verify service is still healthy after the scan
+          begin
+            if config && config['health_check']
+              primary_port = target.allocated_ports[env_meta.port_mapping.key('RPORT')]
+              health_port = primary_port || target.allocated_ports.values.first
+              runtime = RuntimeAdapter.detect rescue nil
+
+              if runtime && health_port
+                HealthManager.new(runtime, target.container_id,
+                                config['health_check'], health_port, self).wait
+              end
+            end
+          rescue => e
+            print_error("FAIL: environment unhealthy after module execution: #{e.message}")
+            return
+          end
+
+          print_good("PASS: environment validated successfully against #{env_meta.definition}'s ci.validation.")
           return
         end
 

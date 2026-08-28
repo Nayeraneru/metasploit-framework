@@ -27,6 +27,7 @@ shared:
     validation:
       expected_session: false
       force_exploit: true 
+      expected_output: "SSH"
 
 profiles:
   default:
