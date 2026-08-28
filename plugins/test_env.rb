@@ -588,7 +588,6 @@ module Msf
       end
     end
 
-    
     # =====================================================================
     # VulnTarget — ActiveModel-based environment instance
     # =====================================================================
@@ -600,7 +599,6 @@ module Msf
                     :runtime, :image_ref, :status, :datastore, :allocated_ports,
                     :created_at, :started_at, :stopped_at, :removed_at, :temp_dirs
                     
-
       validates :container_id, presence: true
       validates :module_fullname, presence: true
       validates :local_id, presence: true, numericality: { only_integer: true }
@@ -672,7 +670,7 @@ module Msf
           'created_at' => created_at&.iso8601,
           'started_at' => started_at&.iso8601,
           'stopped_at' => stopped_at&.iso8601,
-          'removed_at' => removed_at&.iso8601,
+          'removed_at' => removed_at&.iso8601
         }
       end
 
@@ -691,7 +689,7 @@ module Msf
           created_at: parse_time(hash['created_at']),
           started_at: parse_time(hash['started_at']),
           stopped_at: parse_time(hash['stopped_at']),
-          removed_at: parse_time(hash['removed_at']),
+          removed_at: parse_time(hash['removed_at'])
         )
       end
 
@@ -962,10 +960,6 @@ module Msf
 
         # Hard reset: fresh empty environment state → next_id will return 1
         @vuln_env = VulnEnvironment.new(instance_id: @instance_id)
-        @store.save(@vuln_env)
-      end
-
-      def save_state
         @store.save(@vuln_env)
       end
 
