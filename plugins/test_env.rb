@@ -1245,6 +1245,8 @@ module Msf
     # schema or admin account yet, so nothing is actually exploitable until
     # this runs.
     class Provisioner
+      PROVISION_MARKER = '/tmp/.msf_test_env_provisioned'.freeze
+
       def initialize(runtime, container_id, provision_config, host_port, dispatcher = nil)
         @runtime = runtime
         @container_id = container_id
@@ -1259,6 +1261,11 @@ module Msf
       def run(datastore = {})
         return true if @config.empty?
 
+        if @config['run_once'] && already_provisioned?
+          print_status("Provisioning already completed (run_once). Skipping.")
+          return true
+        end
+
         type = @config['type']
         unless type == 'http_post'
           raise "Unknown provision type: #{type.inspect}"
@@ -1269,6 +1276,8 @@ module Msf
         Timeout.timeout(@config['timeout'] || 10) do
           post_http(datastore)
         end
+
+        mark_provisioned! if @config['run_once']
 
         print_good("Provisioning request sent.")
         true
@@ -1290,6 +1299,28 @@ module Msf
       end
 
       private
+      
+      # Checks whether the provision marker file exists inside the
+      # container. This allows run_once provisioning to survive container
+      # stops/starts and state reconstruction.
+      def already_provisioned?
+        output, exit_code = @runtime.exec(@container_id, "test -f #{PROVISION_MARKER}")
+        exit_code == 0
+      rescue => e
+        # If we can't check, assume not provisioned and proceed
+        false
+      end
+
+      # Creates the provision marker file inside the container so that
+      # future start/restart operations know provisioning is complete.
+      def mark_provisioned!
+        @runtime.exec(@container_id, "touch #{PROVISION_MARKER}")
+      rescue => e
+        # Non-fatal: provisioning succeeded but marker could not be written.
+        # The worst case is that a future restart might re-run provisioning,
+        # which for idempotent operations (like form submissions) is harmless.
+        print_warning("Could not write provision marker: #{e.message}")
+      end
 
       def post_http(datastore)
         path = @config['path'] || '/'

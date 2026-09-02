@@ -24,9 +24,10 @@ shared:
     retries: 10
 
   ci:
+    exploit:
+      force_exploit: true 
     validation:
       expected_session: false
-      force_exploit: true 
       expected_output: "SSH"
 
 profiles:
