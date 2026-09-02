@@ -1299,7 +1299,7 @@ module Msf
       end
 
       private
-      
+
       # Checks whether the provision marker file exists inside the
       # container. This allows run_once provisioning to survive container
       # stops/starts and state reconstruction.
@@ -2443,7 +2443,7 @@ end
           return
         end
 
-        # start accepts single ID for safety (per your Week 1 spec)
+        # start accepts single ID
         id = args.first.to_i
         target = self.class.registry.get(id)
 
@@ -2479,17 +2479,30 @@ end
               config = loader.resolve(env_meta.definition, target.env_version,
                                       env_meta.profile, env_meta.overrides) rescue nil
 
-              if config && config['health_check']
-                # Determine which host port to health-check
-                primary_port = target.allocated_ports[env_meta.port_mapping.key('RPORT')]
-                health_port = primary_port || target.allocated_ports.values.first
+              if config
+                # For environments that were provisioned during build, the
+                # service state after restart is post-provision (e.g. WordPress
+                # returns 200 at /, not 302 to the install wizard). Use verify
+                # instead of the base health_check to confirm the configured
+                # state is restored.
+                check_config = if config['provision'] && config['verify']
+                                 config['verify']
+                               else
+                                 config['health_check']
+                               end
 
-                begin
-                  HealthManager.new(runtime, target.container_id,
-                                  config['health_check'], health_port, self).wait
-                rescue => e
-                  print_warning("Health check warning after start: #{e.message}")
-                  # Container started; we still mark running but warn user
+                if check_config
+                  primary_port = target.allocated_ports[env_meta.port_mapping.key('RPORT')]
+                  health_port = primary_port || target.allocated_ports.values.first
+
+                  begin
+                    HealthManager.new(runtime, target.container_id,
+                                    check_config, health_port, self).wait
+                  rescue => e
+                    print_warning("Health check warning after start: #{e.message}")
+                    # Container started; we still mark running but warn user
+
+                  end
                 end
               end
             end
