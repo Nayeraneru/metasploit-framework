@@ -25,7 +25,7 @@ module Msf
       attr_reader :definition, :default_variant, :profile, :port_mapping, :overrides
 
       # Required keys that must be present
-      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze
+      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze unless defined?(REQUIRED_KEYS)
 
       # Valid types for each key
       SCHEMA = {
@@ -34,7 +34,7 @@ module Msf
         'profile'         => String,
         'port_mapping'    => Hash,
         'overrides'       => Hash
-      }.freeze
+      }.freeze unless defined?(SCHEMA)
 
       def initialize(raw_hash)
         @raw = raw_hash || {}
@@ -709,7 +709,7 @@ module Msf
     class VulnEnvironment
       include ActiveModel::Validations
 
-      DEFAULT_VERSION = '1.0.0'
+      DEFAULT_VERSION = '1.0.0' unless defined?(DEFAULT_VERSION)
 
       attr_accessor :version, :instance_id
 
@@ -795,7 +795,7 @@ module Msf
     # VulnEnvironmentStore — YAML persistence in ~/.msf4/
     # =====================================================================
     class VulnEnvironmentStore
-      DEFAULT_PATH = File.join(Dir.home, '.msf4', 'test_env_registry.yml')
+      DEFAULT_PATH = File.join(Dir.home, '.msf4', 'test_env_registry.yml') unless defined?(DEFAULT_PATH)
 
       def initialize(path = DEFAULT_PATH)
         @path = path
@@ -1285,7 +1285,7 @@ module Msf
     # schema or admin account yet, so nothing is actually exploitable until
     # this runs.
     class Provisioner
-      PROVISION_MARKER = '/tmp/.msf_test_env_provisioned'.freeze
+      PROVISION_MARKER = '/tmp/.msf_test_env_provisioned'.freeze unless defined?(PROVISION_MARKER)
 
       def initialize(runtime, container_id, provision_config, host_port, dispatcher = nil)
         @runtime = runtime
