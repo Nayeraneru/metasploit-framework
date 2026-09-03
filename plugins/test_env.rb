@@ -1672,14 +1672,22 @@ def cmd_test_env_build(args)
     )
     registered = true
 
-    # Step 17: apply datastore to the active module
+    # Step 17: free host ports for stage/fetch payloads (avoids Rex::BindFailed on 8080)
+    %w[SRVPORT FETCH_SRVPORT].each do |opt|
+      if mod.options.include?(opt)
+        free_port = free_local_port
+        datastore[opt] = free_port
+      end
+    end
+
+    # Step 18: apply datastore to the active module
     datastore.each do |key, value|
       if mod.options.include?(key)
         mod.datastore[key] = value
       end
     end
 
-    # Step 18: display results to user
+    # Step 19: display results to user
     build_display_results(env_id, config, datastore, mod)
 
   rescue PortAllocator::NoPortsAvailable => e
