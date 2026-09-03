@@ -1955,6 +1955,14 @@ def build_display_results(env_id, config, datastore, mod)
   print_good("Environment ready.")
   print_status("Environment ID: #{env_id}")
 
+  %w[SRVPORT FETCH_SRVPORT].each do |opt|
+    if mod.options.include?(opt)
+      free_port = free_local_port
+      mod.datastore[opt] = free_port
+      datastore[opt] = free_port
+    end
+  end
+
   applicable = datastore.select { |k, _v| mod.options.include?(k) }
   applicable.each do |key, value|
     print_status("   #{key.ljust(12)} => #{value}")
@@ -1964,6 +1972,7 @@ def build_display_results(env_id, config, datastore, mod)
   opts = applicable.map { |k, v| "#{k}=#{v}" }.join(' ')
   print_status("Suggested: #{action} #{opts}")
 end
+
       def cmd_test_env_help
         print_line("Usage: test_env <command>")
         print_line
