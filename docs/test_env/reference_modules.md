@@ -50,3 +50,60 @@
 - **Credentials:** none required — this CVE is unauthenticated
 - **Exploit Context:** Unauthenticated; sends crafted OpenWire packet that loads attacker-hosted Spring XML config. Requires TARGET => 1 (Linux) override — default target is Windows.
 
+---
+
+## Module 4: HTTP Version Scanner (Auxiliary)
+- **Path:** `auxiliary/scanner/http/http_version`
+- **Type:** Auxiliary scanner (no session produced)
+- **Port:** 80
+- **Profile:** `default`
+- **Health Check:** HTTP GET `/` expecting 200
+- **Why:** Trivial scanner module suggested by mentor. Demonstrates that `test_env` works for auxiliary modules, not just exploits. Produces `[+]` output (server banner) without requiring a shell.
+- **VulnerableEnvironment Definition:** `httpd` (shared with http_header and robots_txt)
+- **Docker Image:** `docker.io/library/httpd:2.4.57`
+- **Credentials:** none required
+- **Scanner Context:** Detects HTTP server version from response headers. No payload, no session.
+
+---
+
+## Module 5: HTTP Header Scanner (Auxiliary)
+- **Path:** `auxiliary/scanner/http/http_header`
+- **Type:** Auxiliary scanner (no session produced)
+- **Port:** 80
+- **Profile:** `default`
+- **Health Check:** HTTP GET `/` expecting 200
+- **Why:** Reuses the same `httpd` definition as `http_version`, proving shared definitions work across multiple independent auxiliary modules.
+- **VulnerableEnvironment Definition:** `httpd`
+- **Docker Image:** `docker.io/library/httpd:2.4.57`
+- **Credentials:** none required
+- **Scanner Context:** Displays HTTP response headers. Uses `IGN_HEADER`, `HTTP_METHOD`, and `TARGETURI` options.
+
+---
+
+## Module 6: HTTP Robots.txt Scanner (Auxiliary)
+- **Path:** `auxiliary/scanner/http/robots_txt`
+- **Type:** Auxiliary scanner (no session produced)
+- **Port:** 80
+- **Profile:** `default`
+- **Health Check:** HTTP GET `/` expecting 200
+- **Why:** Third auxiliary module reusing `httpd`. Demonstrates that shared definitions scale to many modules without duplication.
+- **VulnerableEnvironment Definition:** `httpd`
+- **Docker Image:** `docker.io/library/httpd:2.4.57`
+- **Credentials:** none required
+- **Scanner Context:** Detects and analyzes `robots.txt` content. Uses `PATH` option.
+
+---
+
+## Module 7: SSH Version Scanner (Auxiliary)
+- **Path:** `auxiliary/scanner/ssh/ssh_version`
+- **Type:** Auxiliary scanner (no session produced)
+- **Port:** 22
+- **Profile:** `default`
+- **Health Check:** TCP connect on port 22 (SSH daemon accepts connections immediately)
+- **Why:** Demonstrates non-HTTP auxiliary scanner with a different health check type (`tcp` instead of `http`). Produces `[+]` output with SSH banner and encryption details.
+- **VulnerableEnvironment Definition:** `openssh`
+- **Docker Image:** `docker.io/rastasheep/ubuntu-sshd:16.04`
+- **Credentials:** root / root (defined in YAML for completeness, but scanner does not use them)
+- **Scanner Context:** Detects SSH version and supported ciphers. No payload, no session.
+
+

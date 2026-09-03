@@ -25,7 +25,7 @@ module Msf
       attr_reader :definition, :default_variant, :profile, :port_mapping, :overrides
 
       # Required keys that must be present
-      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze
+      REQUIRED_KEYS = %w[definition default_variant port_mapping].freeze unless defined?(REQUIRED_KEYS)
 
       # Valid types for each key
       SCHEMA = {
@@ -34,7 +34,7 @@ module Msf
         'profile'         => String,
         'port_mapping'    => Hash,
         'overrides'       => Hash
-      }.freeze
+      }.freeze unless defined?(SCHEMA)
 
       def initialize(raw_hash)
         @raw = raw_hash || {}
@@ -709,7 +709,7 @@ module Msf
     class VulnEnvironment
       include ActiveModel::Validations
 
-      DEFAULT_VERSION = '1.0.0'
+      DEFAULT_VERSION = '1.0.0' unless defined?(DEFAULT_VERSION)
 
       attr_accessor :version, :instance_id
 
@@ -795,7 +795,7 @@ module Msf
     # VulnEnvironmentStore — YAML persistence in ~/.msf4/
     # =====================================================================
     class VulnEnvironmentStore
-      DEFAULT_PATH = File.join(Dir.home, '.msf4', 'test_env_registry.yml')
+      DEFAULT_PATH = File.join(Dir.home, '.msf4', 'test_env_registry.yml') unless defined?(DEFAULT_PATH)
 
       def initialize(path = DEFAULT_PATH)
         @path = path
@@ -984,36 +984,62 @@ module Msf
 
         # RECONSTRUCT: add containers found by labels but missing from registry
         containers = runtime.list(filters: { 'label' => 'msf.vulnenv.managed_by=test_env' })
+        elog("reconstruct_state: found #{containers.length} managed container(s)")
 
         containers.each do |container|
           labels = container.dig('Config', 'Labels') || container['Labels'] || {}
+          if labels.is_a?(String)
+            labels = labels.split(',').each_with_object({}) do |pair, hash|
+              key, value = pair.split('=', 2)
+              hash[key] = value || ''
+            end
+          end
           container_id = normalize_container_id(container['ID'] || container['Id'])
 
           # Identify by container_id, NOT by env_id label (labels are immutable
           # and become stale after ID compaction)
-          next if @vuln_env.find_by_container(container_id)
+          if @vuln_env.find_by_container(container_id)
+            elog("reconstruct_state: skip #{container_id} — already in registry")
+            next
+          end
 
           module_fullname = labels['msf.vulnenv.module']
           version = labels['msf.vulnenv.version']
           ports = decode_port_label(labels['msf.vulnenv.ports'])
 
+          unless module_fullname && !module_fullname.empty?
+            elog("reconstruct_state: skip #{container_id} — missing msf.vulnenv.module label")
+            next
+          end
+
           mod = @framework.modules.create(module_fullname) rescue nil
-          next unless mod
+          unless mod
+            elog("reconstruct_state: skip #{container_id} — could not load module '#{module_fullname}'")
+            next
+          end
 
           vuln_env_meta = mod.send(:module_info)['VulnerableEnvironment'] rescue nil
-          next unless vuln_env_meta
+          unless vuln_env_meta
+            elog("reconstruct_state: skip #{container_id} — module has no VulnerableEnvironment")
+            next
+          end
 
           definition_name = vuln_env_meta['definition']
           profile = vuln_env_meta['profile'] || 'default'
           overrides = vuln_env_meta['overrides'] || {}
 
           loader = EnvironmentDefinitionLoader.new(Msf::Config.data_directory)
-          config = loader.resolve(definition_name, version, profile, overrides) rescue nil
-          next unless config
+          begin
+            config = loader.resolve(definition_name, version, profile, overrides)
+          rescue => e
+            elog("reconstruct_state: skip #{container_id} — resolve failed for #{definition_name}/#{version}: #{e.message}")
+            next
+          end
 
           datastore = { 'RHOSTS' => '127.0.0.1' }
-          vuln_env_meta['port_mapping'].each do |container_port, ds_option|
-            datastore[ds_option] = ports[container_port] if ports[container_port]
+          (vuln_env_meta['port_mapping'] || {}).each do |container_port, ds_option|
+            host = ports[container_port.to_i] || ports[container_port.to_s.to_i]
+            datastore[ds_option] = host if host
           end
 
           if config['datastore_defaults']
@@ -1022,10 +1048,23 @@ module Msf
             end
           end
 
-          created_time = Time.parse(container['Created']) rescue Time.now
-          started_time = Time.parse(container.dig('State', 'StartedAt')) rescue Time.now
+          # Merge default credentials the same way build does
+          if config['credentials'] && config['credentials']['default']
+            config['credentials']['default'].each do |key, value|
+              ds_key = key.to_s.upcase
+              datastore[ds_key] = value unless datastore.key?(ds_key)
+            end
+          end
 
-          assigned_id = @vuln_env.next_id
+          created_time = Time.parse(container['Created']) rescue Time.now
+          started_time = Time.parse(container.dig('State', 'StartedAt') || container['StartedAt']) rescue Time.now
+
+          preferred_id = labels['msf.vulnenv.env_id'].to_i
+          assigned_id = if preferred_id > 0 && @vuln_env.find_by_id(preferred_id).nil?
+                          preferred_id
+                        else
+                          @vuln_env.next_id
+                        end
           target = VulnTarget.new(
             local_id: assigned_id,
             container_id: container_id,
@@ -1040,12 +1079,13 @@ module Msf
           )
 
           @vuln_env.add_target(target)
-          print_status("Reconstructed environment #{assigned_id} from container labels.")
+          elog("reconstruct_state: reconstructed environment #{assigned_id} from container #{container_id}")
         end
 
         @store.save(@vuln_env)
       rescue => e
         elog("Label reconstruction failed: #{e.message}")
+        elog(e.backtrace.join("\n")) if e.backtrace
       end
 
       def find_by_container(container_id)
@@ -1245,7 +1285,7 @@ module Msf
     # schema or admin account yet, so nothing is actually exploitable until
     # this runs.
     class Provisioner
-      PROVISION_MARKER = '/tmp/.msf_test_env_provisioned'.freeze
+      PROVISION_MARKER = '/tmp/.msf_test_env_provisioned'.freeze unless defined?(PROVISION_MARKER)
 
       def initialize(runtime, container_id, provision_config, host_port, dispatcher = nil)
         @runtime = runtime
@@ -1632,14 +1672,22 @@ def cmd_test_env_build(args)
     )
     registered = true
 
-    # Step 17: apply datastore to the active module
+    # Step 17: free host ports for stage/fetch payloads (avoids Rex::BindFailed on 8080)
+    %w[SRVPORT FETCH_SRVPORT].each do |opt|
+      if mod.options.include?(opt)
+        free_port = free_local_port
+        datastore[opt] = free_port
+      end
+    end
+
+    # Step 18: apply datastore to the active module
     datastore.each do |key, value|
       if mod.options.include?(key)
         mod.datastore[key] = value
       end
     end
 
-    # Step 18: display results to user
+    # Step 19: display results to user
     build_display_results(env_id, config, datastore, mod)
 
   rescue PortAllocator::NoPortsAvailable => e
@@ -1915,6 +1963,14 @@ def build_display_results(env_id, config, datastore, mod)
   print_good("Environment ready.")
   print_status("Environment ID: #{env_id}")
 
+  %w[SRVPORT FETCH_SRVPORT].each do |opt|
+    if mod.options.include?(opt)
+      free_port = free_local_port
+      mod.datastore[opt] = free_port
+      datastore[opt] = free_port
+    end
+  end
+
   applicable = datastore.select { |k, _v| mod.options.include?(k) }
   applicable.each do |key, value|
     print_status("   #{key.ljust(12)} => #{value}")
@@ -1924,6 +1980,7 @@ def build_display_results(env_id, config, datastore, mod)
   opts = applicable.map { |k, v| "#{k}=#{v}" }.join(' ')
   print_status("Suggested: #{action} #{opts}")
 end
+
       def cmd_test_env_help
         print_line("Usage: test_env <command>")
         print_line
@@ -2324,7 +2381,7 @@ end
             if config && config['health_check']
               primary_port = target.allocated_ports[env_meta.port_mapping.key('RPORT')]
               health_port = primary_port || target.allocated_ports.values.first
-              runtime = RuntimeAdapter.detect rescue nil
+              runtime = self.class.runtime || (RuntimeAdapter.detect(framework.datastore) rescue nil)
 
               if runtime && health_port
                 HealthManager.new(runtime, target.container_id,
@@ -2786,7 +2843,8 @@ end
     # =====================================================================
     def initialize(framework, opts = nil)
       super(framework, opts)
-      @runtime = RuntimeAdapter.detect
+      # Prefer framework.datastore (from 'set TEST_ENV_RUNTIME ...') over ENV
+      @runtime = RuntimeAdapter.detect(framework.datastore)
       @registry = BuiltEnvironmentRegistry.new(framework)
 
       ConsoleCommandDispatcher.runtime = @runtime
@@ -2802,7 +2860,14 @@ end
         print_error("TestEnv plugin loaded, but no container runtime found.")
         print_error("Install Docker or Podman to use test_env.")
       end
-      @registry.reconstruct_state(@runtime) if @runtime
+
+      if @runtime
+        before = @registry.list.length
+        @registry.reconstruct_state(@runtime)
+        added = @registry.list.length - before
+        print_status("Reconstructed #{added} environment(s) from running containers.") if added > 0
+      end
+
       add_console_dispatcher(ConsoleCommandDispatcher)
     end
 
