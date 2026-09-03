@@ -1,6 +1,5 @@
 # Developer Documentation — Environment Definitions
 
-> **Version:** 1.0  
 > **Scope:** How to define, validate, and maintain vulnerable environment definitions for the `test_env` plugin.
 
 ---
