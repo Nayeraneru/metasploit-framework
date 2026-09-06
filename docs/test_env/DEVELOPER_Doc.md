@@ -213,9 +213,10 @@ Some images boot with the target process running but the application itself not 
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `type` | String | **Yes** | Currently only `http_post` is supported. |
+| `type` | String | **Yes** | Provisioning mechanism. Currently only `http` is supported. |
+| `method` | String | No | HTTP verb when `type` is `http`. One of: `post`, `get`, `put`, `patch`. Default: `post`. |
 | `path` | String | **Yes** | Request path, sent to the primary mapped port. |
-| `body` | Hash | No | Form fields, sent as `application/x-www-form-urlencoded`. Values may reference `{{ credentials.default.<key> }}`, which is resolved against the built datastore. |
+| `body` | Hash | No | Form fields, sent as `application/x-www-form-urlencoded`. Values may reference `{{ credentials.default.<key> }}`, which is resolved against the built datastore. Only used for `post`, `put`, and `patch`. |
 | `timeout` | Integer | No | Seconds to wait for the request. Default: `10`. |
 | `run_once` | Boolean | No | If `true`, provisioning is skipped if a marker file exists inside the container (e.g., after a `stop`/`start` cycle). Default: `false`. |
 
@@ -223,7 +224,8 @@ Some images boot with the target process running but the application itself not 
 
 ```yaml
 provision:
-  type: http_post
+  type: http
+  method: post
   path: /wp-admin/install.php?step=2
   body:
     weblog_title: "Vulnerable WP"

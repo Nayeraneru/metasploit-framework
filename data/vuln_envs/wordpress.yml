@@ -37,7 +37,8 @@ shared:
   # credentials defined above. Runs once, after health_check
   # passes and before the environment is considered ready.
   provision:
-    type: http_post
+    type: http
+    method: post
     path: /wp-admin/install.php?step=2
     body:
       weblog_title: "Vulnerable WP"

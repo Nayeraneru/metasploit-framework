@@ -1307,14 +1307,14 @@ module Msf
         end
 
         type = @config['type']
-        unless type == 'http_post'
+        unless type == 'http'
           raise "Unknown provision type: #{type.inspect}"
         end
 
         print_status("Provisioning environment...")
 
         Timeout.timeout(@config['timeout'] || 10) do
-          post_http(datastore)
+          http_request(datastore)
         end
 
         mark_provisioned! if @config['run_once']
@@ -1362,7 +1362,7 @@ module Msf
         print_warning("Could not write provision marker: #{e.message}")
       end
 
-      def post_http(datastore)
+      def http_request(datastore)
         path = @config['path'] || '/'
         uri = URI("http://127.0.0.1:#{@host_port}#{path}")
 
@@ -1370,9 +1370,24 @@ module Msf
         http.open_timeout = 5
         http.read_timeout = 10
 
-        request = Net::HTTP::Post.new(uri)
-        body = resolve_template(@config['body'] || {}, datastore)
-        request.set_form_data(body)
+        method = (@config['method'] || 'post').to_s.downcase
+        request = case method
+                  when 'get'
+                    Net::HTTP::Get.new(uri)
+                  when 'put'
+                    Net::HTTP::Put.new(uri)
+                  when 'patch'
+                    Net::HTTP::Patch.new(uri)
+                  when 'post'
+                    Net::HTTP::Post.new(uri)
+                  else
+                    raise "Unknown HTTP method: #{method.inspect}"
+                  end
+
+        if %w[post put patch].include?(method)
+          body = resolve_template(@config['body'] || {}, datastore)
+          request.set_form_data(body)
+        end
 
         response = http.request(request)
 
@@ -1380,7 +1395,6 @@ module Msf
           raise "provision request to #{path} returned #{response.code}"
         end
       end
-
       # Resolves "{{ credentials.default.username }}"-style tokens in the
       # provision body against the datastore already built for this
       # environment (USERNAME/PASSWORD etc. are merged in from
