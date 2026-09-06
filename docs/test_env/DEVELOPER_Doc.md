@@ -127,9 +127,9 @@ Defines how `test_env` waits for the service to become ready after the container
 | `type` | String | **Yes** | `http`, `tcp`, or `command`. |
 | `path` | String | If `type=http` | HTTP path to request. |
 | `expected_status` | Integer | No | Expected HTTP status code. Default: `200`. |
-| `match` | String | No | Substring the response body must contain. Use this to distinguish "server responding" from "app actually ready" (e.g., an install wizard vs. a login page). |
+| `match` | String | No | Regex pattern the response body must match. Use this to distinguish "server responding" from "app actually ready" (e.g., an install wizard vs. a login page). |
 | `command` | String | If `type=command` | Shell command to execute **inside** the container. |
-| `expected_output` | String | If `type=command` | Substring the command output must contain. |
+| `expected_output` | String | If `type=command` | Regex pattern the command output must match. |
 | `interval` | Integer | No | Seconds between check attempts. Default: `5`. |
 | `timeout` | Integer | No | Seconds to wait for a single check. Default: `2`. |
 | `retries` | Integer | No | Maximum number of attempts. Default: `12`. |
@@ -171,6 +171,10 @@ health_check:
   timeout: 5
   retries: 20
 ```
+> **Naming note:** `match` and `expected_output` both perform pattern matching, but they are named by context rather than by mechanism:
+> - **`match`** — used for HTTP response bodies in `health_check` and `verify`.
+> - **`expected_output`** — used for command stdout in `health_check` and for session verification output in `ci.validation`.
+> Patterns are evaluated as Ruby regular expressions (not substrings), so anchors (`^`, `$`) and character classes work as expected.
 
 ---
 
@@ -314,7 +318,7 @@ Defines what "success" looks like for automated validation. Read by `test_env va
 |-----|------|----------|-------------|
 | `expected_session` | Boolean | No | Default `true`. If `false`, validation passes without checking for a session (used for auxiliary modules). |
 | `session_type` | String | No | `meterpreter` or `shell`. If set, the created session's type must match. |
-| `expected_output` | String | No | Substring that running a verification command on the session must contain, e.g., `"uid="`. |
+| `expected_output` | String | No | Regex pattern that the output of the verification command on the session must match, e.g., `"uid="` or `"uid=\\d+"`. |
 | `timeout` | Integer | No | Seconds to wait for a session to appear. Default: `120`. |
 
 **Example:**
@@ -386,6 +390,69 @@ Level 3: Module-level overrides (VulnerableEnvironment['overrides'])
 - **Hash fields** (e.g., `health_check`, `datastore_defaults`) are **deep-merged**: nested keys are combined, not replaced wholesale.
 - **Scalar fields** (e.g., `image`, `build_args`) are **replaced** by the higher level.
 - **The `description` key** in a profile is informational only and is excluded from the merge.
+
+### Example: How the Rules Apply
+
+Consider a definition where `shared`, the `broker-only` profile, and a module's `overrides` all contribute to the final `health_check` and `datastore_defaults`:
+
+**Level 1 — `shared` (base):**
+```yaml
+health_check:
+  type: http
+  path: /api/jolokia/
+  expected_status: 200
+  interval: 5
+  timeout: 2
+  retries: 12
+datastore_defaults:
+  TARGETURI: /
+```
+
+**Level 2 — Profile `broker-only` overrides:**
+```yaml
+health_check:
+  type: tcp
+  interval: 2
+ci:
+  exploit:
+    force_exploit: true
+description: "Web console not assumed reachable"
+```
+
+**Level 3 — Module `overrides`:**
+```ruby
+'overrides' => {
+  'health_check' => {
+    'retries' => 20
+  },
+  'datastore_defaults' => {
+    'TARGETURI' => '/console'
+  }
+}
+```
+
+**Resolved result:**
+```yaml
+health_check:
+  type: tcp              # ← scalar replaced by profile
+  path: /api/jolokia/    # ← preserved from shared (deep-merge)
+  expected_status: 200   # ← preserved from shared (deep-merge)
+  interval: 2            # ← scalar replaced by profile
+  timeout: 2             # ← preserved from shared (deep-merge)
+  retries: 20            # ← scalar replaced by module overrides
+datastore_defaults:
+  TARGETURI: /console    # ← scalar replaced by module overrides
+ci:
+  exploit:
+    force_exploit: true  # ← added by profile (deep-merge)
+```
+
+Notice that:
+- `health_check` is a **hash**, so keys are merged across all three levels rather than the profile or overrides replacing the entire block.
+- `type`, `interval`, `retries`, and `TARGETURI` are **scalars**, so the highest-level value wins.
+- `description` from the profile never appears in the resolved config because it is stripped before merging.
+
+---
 
 ### Resolution Steps
 
@@ -663,7 +730,3 @@ profiles:
       exploit:
         force_exploit: true
 ```
-
----
-
-*End of Developer Documentation*

@@ -1228,7 +1228,7 @@ module Msf
         end
 
         expected_match = @config['match']
-        if expected_match && !response.body.to_s.include?(expected_match)
+        if expected_match && !response.body.to_s.match?(Regexp.new(expected_match))
           print_status("  Health check got status #{actual_status} but response did not contain expected content")
           return false
         end
@@ -1268,7 +1268,7 @@ module Msf
         return false unless exit_code == 0
 
         if expected_output
-          output.include?(expected_output)
+          output.match?(Regexp.new(expected_output))
         else
           true
         end
@@ -2362,7 +2362,7 @@ end
               end
             end
 
-            if response && response.include?(expected_text)
+            if response && response.match?(Regexp.new(expected_text))
               print_good("Service response contains expected text: '#{expected_text}'")
             else
               print_error("FAIL: service response did not contain '#{expected_text}'")
@@ -2470,7 +2470,7 @@ end
               end
             end
 
-            if result&.include?(expected_output)
+            if result&.match?(Regexp.new(expected_output))
               session = candidate
               output = result
               break

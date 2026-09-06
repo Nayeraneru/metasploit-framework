@@ -475,7 +475,7 @@ msf > test_env exec 2
 
 ---
 
-## Environment Variables & Options****************************************
+## Environment Variables & Options
 
 ### Shell Environment Variables
 
@@ -773,6 +773,3 @@ If the container was removed manually (outside `test_env`), run `test_env status
 | `test_env validate` | Verify exploit success | `<ID>` |
 | `test_env status` | Show runtime + definitions | — |
 | `test_env help` | Show usage | — |
-
----
-
