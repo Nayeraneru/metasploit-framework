@@ -150,9 +150,9 @@ shared:
 | `type` | String | Yes | `http`, `tcp`, or `command` |
 | `path` | String | If type=http | HTTP path to check |
 | `expected_status` | Integer | No | Default: 200 |
-| `match` | String | No | If type=http. Substring the response body must contain. Only checked once `expected_status` matches; use to distinguish "server responding" from "app actually ready" (e.g. an install wizard and a working login page can both return the same status) |
+| `match` | String | No | If type=http. Regex pattern the response body must match. Only checked once `expected_status` matches; use to distinguish "server responding" from "app actually ready" (e.g. an install wizard and a working login page can both return the same status) |
 | `command` | String | If type=command | Command to execute |
-| `expected_output` | String | If type=command | Substring to match |
+| `expected_output` | String | If type=command | Regex pattern the command output must match |
 | `interval` | Integer | No | Seconds between checks. Default: 5 |
 | `timeout` | Integer | No | Seconds to wait. Default: 2 |
 | `retries` | Integer | No | Max attempts. Default: 12 |
@@ -184,7 +184,8 @@ passes and before the environment is registered as ready.
 ```yaml
 shared:
   provision:
-    type: http_post
+    type: http
+    method: post
     path: /wp-admin/install.php?step=2
     body:
       weblog_title: "Vulnerable WP"
@@ -199,9 +200,10 @@ shared:
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `type` | String | Yes | Currently only `http_post` is supported |
+| `type` | String | Yes | Provisioning mechanism. Currently only `http` is supported |
+| `method` | String | No | HTTP verb when `type` is `http`. One of: `post`, `get`, `put`, `patch`. Default: `post` |
 | `path` | String | Yes | Request path, sent to the primary mapped port (the container port mapped to `RPORT` in `port_mapping`) |
-| `body` | Hash | No | Form fields, sent as `application/x-www-form-urlencoded`. Values may reference `{{ credentials.default.<key> }}`, which is resolved against the built datastore (e.g. `USERNAME`/`PASSWORD`) |
+| `body` | Hash | No | Form fields, sent as `application/x-www-form-urlencoded`. Values may reference `{{ credentials.default.<key> }}`, which is resolved against the built datastore (e.g. `USERNAME`/`PASSWORD`). Only used for `post`, `put`, and `patch` |
 | `timeout` | Integer | No | Seconds to wait for the request. Default: 10 |
 
 A response status in the `200`–`399` range is treated as success. Anything
@@ -294,7 +296,7 @@ YAML description alongside a separately-hand-maintained CI script.
 |-----|------|----------|--------------|
 | `expected_session` | Boolean | No | Default `true`. If `false`, `validate` passes without checking for a session at all |
 | `session_type` | String | No | `meterpreter` or `shell`. If set, the created session's type must match |
-| `expected_output` | String | No | Substring that running `id` on the session must contain, e.g. `"uid="` |
+| `expected_output` | String | No | Regex pattern that the output of the verification command on the session must match, e.g. `"uid="` or `"uid=\\d+"` |
 | `timeout` | Integer | No | Seconds to wait for a session to appear before failing. Default: 120 |
 
 `validate` reports `PASS` or `FAIL` with a specific reason. If no session
